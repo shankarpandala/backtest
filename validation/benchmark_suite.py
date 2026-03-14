@@ -2145,7 +2145,7 @@ def benchmark_lean(
                 memory_mb=0,
                 error="Neither 'lean' nor 'uvx' executable found",
             )
-        lean_cmd = [uvx_binary, "--python", "3.11", "--with", "setuptools<81", "lean"]
+        lean_cmd = [uvx_binary, "--python", "3.12", "--with", "setuptools<81", "lean"]
 
     def parse_int(value: object) -> int:
         if value is None:

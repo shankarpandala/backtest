@@ -57,15 +57,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Office/Business :: Financial :: Investment",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Typing :: Typed",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 # Core dependencies
 dependencies = [
@@ -183,7 +183,7 @@ filterwarnings = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 fix = true
 exclude = [
     "validation/*",  # Standalone scripts run in isolated venvs
@@ -216,7 +216,7 @@ ignore = [
 "tests/*" = ["ARG001", "ARG002", "F841", "SIM102", "SIM108"]  # Test patterns
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.12"
 root = ["src"]
 
 [tool.ty.src]

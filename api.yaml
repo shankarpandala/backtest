@@ -1,6 +1,6 @@
 name: ml4t-backtest
 version: 1.0.0
-python_requires: ">=3.11"
+python_requires: ">=3.12"
 description: Event-driven backtesting engine with VectorBT validation
 
 modules:
