@@ -514,6 +514,29 @@ class TestTargetWeightExecutorPreview:
         assert goog_preview["action"] == "close_position"
         assert goog_preview["target_weight"] == 0.0
 
+    def test_preview_close_position_uses_last_known_price_when_close_is_null(self, broker):
+        """Preview should tolerate null closes for held positions slated for close."""
+        executor = TargetWeightExecutor()
+
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 150.0},
+            {"AAPL": 149.0},
+            {"AAPL": 151.0},
+            {"AAPL": 148.0},
+            {"AAPL": 1_000_000},
+            {},
+        )
+        broker.submit_order("AAPL", 100)
+        broker._process_orders()
+
+        previews = executor.preview({}, {"AAPL": {"close": None}}, broker)
+
+        assert len(previews) == 1
+        assert previews[0]["asset"] == "AAPL"
+        assert previews[0]["action"] == "close_position"
+        assert previews[0]["value"] == pytest.approx(-15000.0)
+
     def test_preview_zero_equity(self):
         """Test preview with zero equity returns empty."""
         executor = TargetWeightExecutor(
@@ -577,6 +600,53 @@ class TestTargetWeightExecutorEdgeCases:
         target_weights = {"AAPL": 0.3}
         data = {}  # No price data
         orders = executor.execute(target_weights, data, broker)
+        assert orders == []
+
+    def test_execute_uses_last_known_price_for_existing_positions(self, broker):
+        """Held positions should not crash rebalancing when current close is null."""
+        executor = TargetWeightExecutor()
+
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 1_000_000},
+            {},
+        )
+        broker.submit_order("AAPL", 100, OrderSide.BUY)
+        broker._process_orders()
+
+        orders = executor.execute({"AAPL": 0.15}, {"AAPL": {"close": None}}, broker)
+
+        assert orders == []
+
+    def test_execute_effective_weights_handles_null_close_for_existing_positions(self, broker):
+        """Pending-aware rebalancing should also tolerate null closes on held positions."""
+        executor = TargetWeightExecutor(
+            RebalanceConfig(
+                cancel_before_rebalance=False,
+                account_for_pending=True,
+                min_trade_value=1.0,
+                min_weight_change=0.001,
+            )
+        )
+
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 1_000_000},
+            {},
+        )
+        broker.submit_order("AAPL", 100, OrderSide.BUY)
+        broker._process_orders()
+
+        orders = executor.execute({"AAPL": 0.15}, {"AAPL": {"close": None}}, broker)
+
         assert orders == []
 
     def test_zero_price(self, broker):

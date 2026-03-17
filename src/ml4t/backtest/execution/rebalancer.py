@@ -241,7 +241,7 @@ class TargetWeightExecutor:
             return None
 
         # Get price
-        price = data.get(asset, {}).get("close")
+        price = self._get_rebalance_price(asset, data)
         if price is None or price <= 0:
             return None
 
@@ -276,6 +276,30 @@ class TargetWeightExecutor:
         side = OrderSide.BUY if shares > 0 else OrderSide.SELL
         return broker.submit_order(asset, abs(shares), side)
 
+    def _get_rebalance_price(self, asset: str, data: dict[str, dict]) -> float | None:
+        """Return the current bar close used for new rebalance trades."""
+        asset_data = data.get(asset) or {}
+        return asset_data.get("close")
+
+    def _get_position_price(
+        self,
+        asset: str,
+        pos,
+        data: dict[str, dict],
+        broker: "Broker",
+    ) -> float | None:
+        """Return a mark price for an existing position, tolerating sparse bars."""
+        price = self._get_rebalance_price(asset, data)
+        if price is None:
+            price = broker._current_prices.get(asset)
+        if price is None:
+            price = broker._last_prices.get(asset)
+        if price is None:
+            price = pos.current_price
+        if price is None:
+            price = pos.entry_price
+        return price
+
     def _get_current_weights(self, broker: "Broker", data: dict[str, dict]) -> dict[str, float]:
         """Get current portfolio weights from held positions only.
 
@@ -292,7 +316,9 @@ class TargetWeightExecutor:
 
         weights = {}
         for asset, pos in broker.positions.items():
-            price = data.get(asset, {}).get("close", pos.entry_price)
+            price = self._get_position_price(asset, pos, data, broker)
+            if price is None or price <= 0:
+                continue
             multiplier = broker.get_multiplier(asset)
             value = pos.quantity * price * multiplier
             weights[asset] = value / equity
@@ -319,7 +345,9 @@ class TargetWeightExecutor:
         # Start with actual positions
         effective_value: dict[str, float] = {}
         for asset, pos in broker.positions.items():
-            price = data.get(asset, {}).get("close", pos.entry_price)
+            price = self._get_position_price(asset, pos, data, broker)
+            if price is None or price <= 0:
+                continue
             multiplier = broker.get_multiplier(asset)
             effective_value[asset] = pos.quantity * price * multiplier
 
@@ -367,10 +395,10 @@ class TargetWeightExecutor:
 
         for asset, target_wt in target_weights.items():
             current_wt = current_weights.get(asset, 0.0)
-            price = data.get(asset, {}).get("close", 0)
+            price = self._get_rebalance_price(asset, data)
             weight_delta = target_wt - current_wt
 
-            if price > 0:
+            if price is not None and price > 0:
                 multiplier = broker.get_multiplier(asset)
                 delta_value = equity * weight_delta
                 shares = delta_value / (price * multiplier)
@@ -401,7 +429,9 @@ class TargetWeightExecutor:
             if asset not in target_weights:
                 pos = broker.get_position(asset)
                 if pos and pos.quantity != 0:
-                    price = data.get(asset, {}).get("close", pos.entry_price)
+                    price = self._get_position_price(asset, pos, data, broker)
+                    if price is None or price <= 0:
+                        continue
                     multiplier = broker.get_multiplier(asset)
                     current_wt = current_weights.get(asset, 0.0)
                     previews.append(
