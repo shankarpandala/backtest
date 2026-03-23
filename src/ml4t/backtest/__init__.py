@@ -13,6 +13,7 @@ try:
 except ImportError:
     __version__ = "0.0.0.dev0"
 
+from .artifact_spec import FeatureSpec, LabelSpec, MarketDataSpec, PredictionSpec
 from .broker import Broker
 from .config import BacktestConfig, CommissionType
 from .datafeed import DataFeed
@@ -56,6 +57,10 @@ __all__ = [
     "BacktestResult",
     "CommissionType",
     "FeedSpec",
+    "MarketDataSpec",
+    "LabelSpec",
+    "FeatureSpec",
+    "PredictionSpec",
     # Canonical domain types
     "OrderType",
     "OrderSide",
