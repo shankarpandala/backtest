@@ -74,7 +74,7 @@ def resolve_rebalance_timestamps(
     *,
     feed_spec: FeedSpec | Any | None = None,
     calendar: str | None = None,
-    timezone: str = "UTC",
+    timezone: str | None = None,
     session_start_time: str | None = None,
     data_frequency: Any | None = None,
     timestamp_semantics: TimestampSemantics | str | None = None,
@@ -107,6 +107,7 @@ def resolve_rebalance_timestamps(
         ts_list,
         calendar=metadata["calendar"],
         timezone=metadata["timezone"],
+        timezone_explicit=metadata["timezone_explicit"],
         session_start_time=metadata["session_start_time"],
     )
     session_dates, session_closes = _resolve_sessions(
@@ -163,7 +164,7 @@ def _resolve_schedule_metadata(
     *,
     feed_spec: FeedSpec | Any | None,
     calendar: str | None,
-    timezone: str,
+    timezone: str | None,
     session_start_time: str | None,
     data_frequency: Any | None,
     timestamp_semantics: TimestampSemantics | str | None,
@@ -171,7 +172,13 @@ def _resolve_schedule_metadata(
     spec = FeedSpec.from_any(feed_spec) if feed_spec is not None else None
 
     resolved_calendar = calendar if calendar is not None else (spec.calendar if spec else None)
-    resolved_timezone = spec.timezone if spec and spec.timezone else timezone
+    resolved_timezone = timezone
+    timezone_explicit = timezone is not None
+    if spec and spec.timezone:
+        resolved_timezone = spec.timezone
+        timezone_explicit = True
+    if resolved_timezone is None:
+        resolved_timezone = "UTC"
     resolved_session_start = (
         session_start_time
         if session_start_time is not None
@@ -194,6 +201,7 @@ def _resolve_schedule_metadata(
     return {
         "calendar": resolved_calendar,
         "timezone": resolved_timezone,
+        "timezone_explicit": timezone_explicit,
         "session_start_time": resolved_session_start,
         "data_frequency": resolved_frequency,
         "timestamp_semantics": semantics,
@@ -231,6 +239,7 @@ def _build_session_config(
     *,
     calendar: str | None,
     timezone: str,
+    timezone_explicit: bool,
     session_start_time: str | None,
 ) -> SessionConfig:
     if calendar is None:
@@ -239,9 +248,10 @@ def _build_session_config(
         )
 
     inferred_timezone = timezone
-    schedule = get_schedule(calendar, timestamps[0].date(), timestamps[-1].date())
-    if not schedule.is_empty():
-        inferred_timezone = schedule["timezone"][0]
+    if not timezone_explicit:
+        schedule = get_schedule(calendar, timestamps[0].date(), timestamps[-1].date())
+        if not schedule.is_empty():
+            inferred_timezone = schedule["timezone"][0]
 
     return SessionConfig(
         calendar=_normalize_session_calendar(calendar),
@@ -273,7 +283,7 @@ def _resolve_sessions(
     session_config: SessionConfig,
     timestamp_semantics: TimestampSemantics,
 ) -> tuple[list[datetime], list[datetime]]:
-    tz = session_config_timezone(session_config)
+    tz = _session_config_timezone(session_config)
     session_start_hour = session_config.get_session_start_hour()
     session_start_minute = session_config.get_session_start_minute()
 
@@ -293,7 +303,7 @@ def _session_label_date(timestamp: datetime, timezone) -> datetime:
     return datetime(ts_local.year, ts_local.month, ts_local.day)
 
 
-def session_config_timezone(session_config: SessionConfig):
+def _session_config_timezone(session_config: SessionConfig):
     from zoneinfo import ZoneInfo
 
     return ZoneInfo(session_config.timezone)

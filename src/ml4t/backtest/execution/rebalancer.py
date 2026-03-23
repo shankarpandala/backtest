@@ -19,9 +19,12 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
+
+import polars as pl
 
 if TYPE_CHECKING:
     from ..broker import Broker
@@ -117,11 +120,11 @@ class TargetWeightExecutor:
 
     def prepare_schedule(
         self,
-        available_timestamps,
+        available_timestamps: Sequence[datetime] | pl.Series,
         *,
-        feed_spec=None,
+        feed_spec: object | None = None,
         calendar: str | None = None,
-        timezone: str = "UTC",
+        timezone: str | None = None,
         session_start_time: str | None = None,
     ) -> frozenset[datetime] | None:
         """Resolve the configured schedule against a feed's available timestamps."""

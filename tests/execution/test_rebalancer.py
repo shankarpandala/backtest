@@ -428,6 +428,21 @@ class TestTargetWeightExecutorScheduling:
 
         assert resolved == frozenset({datetime(2024, 1, 5), datetime(2024, 1, 12)})
 
+    def test_execute_requires_prepare_schedule_when_schedule_is_configured(self, broker, sample_data):
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(
+                schedule=RebalanceSchedule.explicit_timestamps([datetime(2024, 1, 2, 9, 30)])
+            )
+        )
+
+        with pytest.raises(ValueError, match="prepare_schedule"):
+            executor.execute(
+                {"AAPL": 0.5},
+                sample_data,
+                broker,
+                timestamp=datetime(2024, 1, 2, 9, 30),
+            )
+
 
 class TestTargetWeightExecutorCashTargeting:
     """Test cash targeting (weights < 1.0)."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -93,6 +93,21 @@ class TestResolveRebalanceTimestamps:
         )
 
         assert result.to_list() == [datetime(2024, 1, 8, 10, 0), datetime(2024, 1, 9, 10, 0)]
+
+    def test_explicit_timezone_is_not_overridden_by_calendar(self) -> None:
+        timestamps = [
+            datetime(2024, 1, 8, 15, 0, tzinfo=UTC),
+            datetime(2024, 1, 8, 16, 0, tzinfo=UTC),
+        ]
+
+        result = resolve_rebalance_timestamps(
+            timestamps,
+            RebalanceCadence.EVERY_SESSION,
+            calendar="NYSE",
+            timezone="America/Chicago",
+        )
+
+        assert result.to_list() == [timestamps[0], timestamps[1]]
 
     def test_weekly_daily_session_labels_use_labeled_dates_not_prior_sessions(self) -> None:
         timestamps = _make_weekday_series("2024-01-01", "2024-01-12")
