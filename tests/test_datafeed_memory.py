@@ -10,6 +10,7 @@ import polars as pl
 import pytest
 
 from ml4t.backtest import DataFeed, FeedSpec
+from ml4t.backtest.config import DataFrequency
 
 
 class TestDataFeedMemoryEfficiency:
@@ -466,3 +467,23 @@ class TestDataFeedContracts:
 
         _ts, data, _ctx = next(iter(feed))
         assert data["AAPL"]["close"] == 101.0
+
+    def test_feed_spec_and_contract_are_mutually_exclusive(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["AAPL"],
+                "close": [100.0],
+            }
+        )
+
+        with pytest.raises(ValueError, match="either feed_spec or contract"):
+            DataFeed(
+                prices_df=prices,
+                feed_spec=FeedSpec(),
+                contract=FeedSpec(),
+            )
+
+    def test_weekly_and_monthly_feed_frequencies_remain_irregular(self):
+        assert FeedSpec(data_frequency="weekly").to_backtest_frequency() == DataFrequency.IRREGULAR
+        assert FeedSpec(data_frequency="monthly").to_backtest_frequency() == DataFrequency.IRREGULAR

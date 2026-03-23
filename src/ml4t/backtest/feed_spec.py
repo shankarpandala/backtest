@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 
 class TimestampSemantics(str, Enum):
@@ -22,6 +22,26 @@ _MISSING = object()
 @dataclass(frozen=True, slots=True)
 class FeedSpec:
     """Dataset contract shared across ML4T libraries."""
+
+    _FIELD_ALIASES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "timestamp_col": ("timestamp_col", "time_col", "datetime_col"),
+        "entity_col": ("entity_col", "symbol_col", "group_col", "ticker_col", "asset_col"),
+        "open_col": ("open_col",),
+        "high_col": ("high_col",),
+        "low_col": ("low_col",),
+        "volume_col": ("volume_col",),
+        "bid_col": ("bid_col",),
+        "ask_col": ("ask_col",),
+        "mid_col": ("mid_col",),
+        "bid_size_col": ("bid_size_col",),
+        "ask_size_col": ("ask_size_col",),
+        "calendar": ("calendar",),
+        "timezone": ("timezone",),
+        "data_frequency": ("data_frequency", "frequency"),
+        "bar_type": ("bar_type",),
+        "timestamp_semantics": ("timestamp_semantics",),
+        "session_start_time": ("session_start_time",),
+    }
 
     timestamp_col: str = "timestamp"
     entity_col: str | Sequence[str] | None = None
@@ -54,7 +74,6 @@ class FeedSpec:
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> FeedSpec:
         """Create a feed contract from a generic mapping."""
-        data: dict[str, Any] = {}
 
         def pick(*names: str) -> Any:
             for name in names:
@@ -62,40 +81,7 @@ class FeedSpec:
                     return mapping[name]
             return _MISSING
 
-        price_col = pick("price_col")
-        close_col = pick("close_col")
-        if price_col is not _MISSING:
-            data["price_col"] = price_col
-        if close_col is not _MISSING:
-            data["close_col"] = close_col
-        elif price_col is not _MISSING:
-            data["close_col"] = price_col
-
-        alias_groups = {
-            "timestamp_col": ("timestamp_col", "time_col", "datetime_col"),
-            "entity_col": ("entity_col", "symbol_col", "group_col", "ticker_col", "asset_col"),
-            "open_col": ("open_col",),
-            "high_col": ("high_col",),
-            "low_col": ("low_col",),
-            "volume_col": ("volume_col",),
-            "bid_col": ("bid_col",),
-            "ask_col": ("ask_col",),
-            "mid_col": ("mid_col",),
-            "bid_size_col": ("bid_size_col",),
-            "ask_size_col": ("ask_size_col",),
-            "calendar": ("calendar",),
-            "timezone": ("timezone",),
-            "data_frequency": ("data_frequency", "frequency"),
-            "bar_type": ("bar_type",),
-            "timestamp_semantics": ("timestamp_semantics",),
-            "session_start_time": ("session_start_time",),
-        }
-        for field_name, aliases in alias_groups.items():
-            value = pick(*aliases)
-            if value is not _MISSING:
-                data[field_name] = value
-
-        return cls(**data)
+        return cls(**cls._extract_alias_data(pick))
 
     @classmethod
     def from_object(cls, value: Any) -> FeedSpec:
@@ -109,46 +95,13 @@ class FeedSpec:
         if metadata is not None:
             return cls.from_object(metadata)
 
-        data: dict[str, Any] = {}
-
         def pick(*names: str) -> Any:
             for name in names:
                 if hasattr(value, name):
                     return getattr(value, name)
             return _MISSING
 
-        price_col = pick("price_col")
-        close_col = pick("close_col")
-        if price_col is not _MISSING:
-            data["price_col"] = price_col
-        if close_col is not _MISSING:
-            data["close_col"] = close_col
-        elif price_col is not _MISSING:
-            data["close_col"] = price_col
-
-        field_aliases = {
-            "timestamp_col": ("timestamp_col", "time_col", "datetime_col"),
-            "entity_col": ("entity_col", "symbol_col", "group_col", "ticker_col", "asset_col"),
-            "open_col": ("open_col",),
-            "high_col": ("high_col",),
-            "low_col": ("low_col",),
-            "volume_col": ("volume_col",),
-            "bid_col": ("bid_col",),
-            "ask_col": ("ask_col",),
-            "mid_col": ("mid_col",),
-            "bid_size_col": ("bid_size_col",),
-            "ask_size_col": ("ask_size_col",),
-            "calendar": ("calendar",),
-            "timezone": ("timezone",),
-            "data_frequency": ("data_frequency", "frequency"),
-            "bar_type": ("bar_type",),
-            "timestamp_semantics": ("timestamp_semantics",),
-            "session_start_time": ("session_start_time",),
-        }
-        for field_name, aliases in field_aliases.items():
-            resolved = pick(*aliases)
-            if resolved is not _MISSING:
-                data[field_name] = resolved
+        data = cls._extract_alias_data(pick)
 
         if "data_frequency" not in data:
             bar_params = getattr(value, "bar_params", None)
@@ -209,8 +162,8 @@ class FeedSpec:
             "daily": DataFrequency.DAILY,
             "1d": DataFrequency.DAILY,
             "d": DataFrequency.DAILY,
-            "weekly": DataFrequency.DAILY,
-            "monthly": DataFrequency.DAILY,
+            "weekly": DataFrequency.IRREGULAR,
+            "monthly": DataFrequency.IRREGULAR,
             "minute": DataFrequency.MINUTE_1,
             "1m": DataFrequency.MINUTE_1,
             "1min": DataFrequency.MINUTE_1,
@@ -245,6 +198,27 @@ class FeedSpec:
                 "ml4t-backtest currently supports a single entity column in FeedSpec.entity_col"
             )
         return values[0]
+
+    @classmethod
+    def _extract_alias_data(cls, pick: Callable[..., Any]) -> dict[str, Any]:
+        data: dict[str, Any] = {}
+        cls._apply_price_aliases(data, pick)
+        for field_name, aliases in cls._FIELD_ALIASES.items():
+            value = pick(*aliases)
+            if value is not _MISSING:
+                data[field_name] = value
+        return data
+
+    @staticmethod
+    def _apply_price_aliases(data: dict[str, Any], pick: Callable[..., Any]) -> None:
+        price_col = pick("price_col")
+        close_col = pick("close_col")
+        if price_col is not _MISSING:
+            data["price_col"] = price_col
+        if close_col is not _MISSING:
+            data["close_col"] = close_col
+        elif price_col is not _MISSING:
+            data["close_col"] = price_col
 
 
 __all__ = ["FeedSpec", "TimestampSemantics"]

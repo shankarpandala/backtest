@@ -499,6 +499,17 @@ class BacktestConfig:
     # === Metadata ===
     preset_name: str | None = None  # Name of preset this was loaded from
     feed_spec: Any | None = field(default=None, repr=False, compare=False)
+    _explicit_timezone: bool = field(default=False, init=False, repr=False, compare=False)
+    _explicit_data_frequency: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def __new__(cls, *args: Any, **kwargs: Any):
+        instance = super().__new__(cls)
+        field_names = [name for name, value in cls.__dataclass_fields__.items() if value.init]
+        provided = set(kwargs)
+        provided.update(field_names[: len(args)])
+        instance._explicit_timezone = "timezone" in provided
+        instance._explicit_data_frequency = "data_frequency" in provided
+        return instance
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""

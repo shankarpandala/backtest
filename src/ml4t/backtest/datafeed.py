@@ -68,6 +68,9 @@ class DataFeed:
         close_col: str | None = None,
         volume_col: str | None = None,
     ):
+        if feed_spec is not None and contract is not None:
+            raise ValueError("Pass either feed_spec or contract, not both")
+
         self.prices = (
             prices_df
             if prices_df is not None

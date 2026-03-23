@@ -96,29 +96,28 @@ class Engine:
     @staticmethod
     def _merge_feed_spec(config: BacktestConfig, feed_spec: Any | None) -> BacktestConfig:
         """Fill missing runtime config from feed metadata without mutating user config."""
-        effective_feed_spec = (
-            config.feed_spec if getattr(config, "feed_spec", None) is not None else feed_spec
-        )
+        effective_feed_spec = config.feed_spec if config.feed_spec is not None else feed_spec
         if effective_feed_spec is None:
             return config
-
-        from .config import DataFrequency
 
         updates: dict[str, Any] = {"feed_spec": effective_feed_spec}
         if config.calendar is None and effective_feed_spec.calendar:
             updates["calendar"] = effective_feed_spec.calendar
-        if config.timezone == "UTC" and effective_feed_spec.timezone:
+        if not config._explicit_timezone and effective_feed_spec.timezone:
             updates["timezone"] = effective_feed_spec.timezone
 
         spec_frequency = effective_feed_spec.to_backtest_frequency()
         if (
-            config.data_frequency == DataFrequency.DAILY
+            not config._explicit_data_frequency
             and spec_frequency is not None
-            and spec_frequency != DataFrequency.DAILY
+            and spec_frequency != config.data_frequency
         ):
             updates["data_frequency"] = spec_frequency
 
-        return replace(config, **updates) if updates else config
+        merged = replace(config, **updates)
+        merged._explicit_timezone = config._explicit_timezone
+        merged._explicit_data_frequency = config._explicit_data_frequency
+        return merged
 
     def run(self) -> BacktestResult:
         """Run backtest and return structured results.
