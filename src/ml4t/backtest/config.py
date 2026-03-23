@@ -507,9 +507,15 @@ class BacktestConfig:
         field_names = [name for name, value in cls.__dataclass_fields__.items() if value.init]
         provided = set(kwargs)
         provided.update(field_names[: len(args)])
-        instance._explicit_timezone = "timezone" in provided
-        instance._explicit_data_frequency = "data_frequency" in provided
+        instance._provided_init_fields = provided
         return instance
+
+    def __post_init__(self) -> None:
+        provided = getattr(self, "_provided_init_fields", set())
+        self._explicit_timezone = "timezone" in provided
+        self._explicit_data_frequency = "data_frequency" in provided
+        if hasattr(self, "_provided_init_fields"):
+            delattr(self, "_provided_init_fields")
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""
