@@ -244,7 +244,7 @@ class Engine:
             )
 
         # Build EquityCurve from raw data
-        equity = EquityCurve()
+        equity = EquityCurve.from_config(self.config)
         for ts, value in self.equity_curve:
             equity.append(ts, value)
 

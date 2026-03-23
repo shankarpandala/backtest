@@ -29,58 +29,17 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
 
+from .analytics.annualization import get_annualization_factor, should_session_align
+from .feed_spec import FeedSpec
 from .types import Fill, Trade
 
 if TYPE_CHECKING:
     from .analytics import EquityCurve, TradeAnalyzer
     from .config import BacktestConfig
 
-
-# Annualization factors for common trading calendars
-_ANNUALIZATION_FACTORS: dict[str, int] = {
-    "crypto": 365,  # 24/7 trading
-    "NYSE": 252,
-    "NASDAQ": 252,
-    "CME_Equity": 252,
-    "CME_Agriculture": 252,
-    "CME_Globex_Energy_and_Metals": 252,
-    "LSE": 253,
-    "XETRA": 252,
-    "TSX": 252,
-    "HKEX": 252,
-    "JPX": 245,
-}
-
-
 def _get_annualization_factor(calendar: str | None) -> int:
-    """Get annualization factor for a trading calendar.
-
-    Args:
-        calendar: Trading calendar name. If None, defaults to 252.
-
-    Returns:
-        Number of trading days per year for the calendar.
-    """
-    if calendar is None:
-        return 252  # Default for equities
-
-    # Check known calendars (case-insensitive)
-    cal_upper = calendar.upper()
-    for name, factor in _ANNUALIZATION_FACTORS.items():
-        if name.upper() == cal_upper:
-            return factor
-
-    # Try pandas_market_calendars for unknown calendars
-    try:
-        from pandas_market_calendars import get_calendar
-
-        cal = get_calendar(calendar)
-        # Estimate from typical year
-        schedule = cal.schedule("2024-01-01", "2024-12-31")
-        return len(schedule)
-    except Exception:
-        # Default fallback
-        return 252
+    """Backward-compatible wrapper for annualization lookup."""
+    return get_annualization_factor(calendar)
 
 
 @dataclass
@@ -114,6 +73,20 @@ class BacktestResult:
     # Cached DataFrames (computed on demand)
     _trades_df: pl.DataFrame | None = field(default=None, repr=False)
     _equity_df: pl.DataFrame | None = field(default=None, repr=False)
+
+    def _feed_spec(self) -> FeedSpec | None:
+        if self.config is None or self.config.feed_spec is None:
+            return None
+        return FeedSpec.from_any(self.config.feed_spec)
+
+    def _auto_session_aligned(self, calendar: str | None = None) -> bool:
+        timestamps = [ts for ts, _ in self.equity_curve]
+        resolved_calendar = calendar or (self.config.calendar if self.config else None)
+        return should_session_align(
+            calendar=resolved_calendar,
+            feed_spec=self._feed_spec(),
+            timestamps=timestamps,
+        )
 
     def to_trades_dataframe(self) -> pl.DataFrame:
         """Convert trades to Polars DataFrame.
@@ -257,10 +230,15 @@ class BacktestResult:
             # Use session alignment
             from .sessions import SessionConfig, compute_session_pnl
 
+            feed_spec = self._feed_spec()
             session_config = SessionConfig(
                 calendar=self.config.calendar,
                 timezone=self.config.timezone,
-                session_start_time=getattr(self.config, "session_start_time", None),
+                session_start_time=(
+                    feed_spec.session_start_time
+                    if feed_spec is not None
+                    else getattr(self.config, "session_start_time", None)
+                ),
             )
             return compute_session_pnl(self.equity_curve, session_config)
 
@@ -339,9 +317,8 @@ class BacktestResult:
         """
         # Determine session alignment
         if session_aligned is None:
-            # Auto-detect: CME calendars typically need session alignment
             cal = calendar or (self.config.calendar if self.config else None)
-            session_aligned = cal is not None and "CME" in str(cal).upper()
+            session_aligned = self._auto_session_aligned(cal)
 
         # Get daily P&L DataFrame
         daily_df = self.to_daily_pnl(session_aligned=session_aligned)
@@ -420,7 +397,7 @@ class BacktestResult:
         # Determine calendar and annualization
         cal = calendar or (self.config.calendar if self.config else None)
         periods_per_year = _get_annualization_factor(cal)
-        session_aligned = cal is not None and "CME" in str(cal).upper()
+        session_aligned = self._auto_session_aligned(cal)
 
         # Extract daily returns with dates
         daily_df = self.to_daily_pnl(session_aligned=session_aligned)

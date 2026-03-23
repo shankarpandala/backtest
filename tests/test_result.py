@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
+from ml4t.backtest import FeedSpec
 from ml4t.backtest.result import (
     BacktestResult,
     _get_annualization_factor,
@@ -302,6 +303,32 @@ class TestBacktestResultDailyPnL:
         assert df["date"][0] == datetime(2024, 1, 1).date()
         assert df["date"][1] == datetime(2024, 1, 2).date()
         assert df["date"][2] == datetime(2024, 1, 3).date()
+
+    def test_daily_returns_auto_aligns_using_feed_session_metadata(self):
+        """Auto alignment should follow feed session metadata, not just calendar name."""
+        from ml4t.backtest.config import BacktestConfig
+
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[
+                (datetime(2024, 1, 1, 18, 0), 100000.0),
+                (datetime(2024, 1, 2, 10, 0), 101000.0),
+            ],
+            fills=[],
+            metrics={},
+            config=BacktestConfig(
+                calendar="NYSE",
+                timezone="America/New_York",
+                feed_spec=FeedSpec(
+                    calendar="NYSE",
+                    session_start_time="17:00",
+                    timestamp_semantics="event_time",
+                ),
+            ),
+        )
+
+        assert len(result.to_daily_pnl()) == 2
+        assert len(result.to_daily_returns()) == 1
 
 
 class TestBacktestResultReturnsSeries:
@@ -793,6 +820,48 @@ class TestBacktestResultMetrics:
         expected = result.to_daily_returns(calendar="CME_Equity").to_list()
         analysis = result.to_portfolio_analysis(calendar="CME_Equity")
         assert list(analysis.returns) == pytest.approx(expected)
+
+    def test_to_portfolio_analysis_uses_feed_semantics_for_auto_alignment(self, monkeypatch):
+        """Portfolio analysis should reuse feed-aware session alignment logic."""
+        import builtins
+
+        from ml4t.backtest.config import BacktestConfig
+
+        class FakePortfolioAnalysis:
+            def __init__(self, returns, **kwargs):
+                self.returns = returns
+                self.kwargs = kwargs
+
+        real_import = builtins.__import__
+
+        def _import(name, *args, **kwargs):
+            if name == "ml4t.diagnostic.evaluation":
+                return SimpleNamespace(PortfolioAnalysis=FakePortfolioAnalysis)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _import)
+
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[
+                (datetime(2024, 1, 1, 18, 0), 100000.0),
+                (datetime(2024, 1, 2, 10, 0), 101000.0),
+            ],
+            fills=[],
+            metrics={},
+            config=BacktestConfig(
+                calendar="NYSE",
+                timezone="America/New_York",
+                feed_spec=FeedSpec(
+                    calendar="NYSE",
+                    session_start_time="17:00",
+                    timestamp_semantics="event_time",
+                ),
+            ),
+        )
+
+        analysis = result.to_portfolio_analysis()
+        assert len(analysis.returns) == 1
 
 
 class TestBacktestResultSchemas:
