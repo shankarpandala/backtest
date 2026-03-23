@@ -231,6 +231,7 @@ class BacktestResult:
             from .sessions import SessionConfig, compute_session_pnl
 
             feed_spec = self._feed_spec()
+            assert feed_spec is not None
             session_config = SessionConfig(
                 calendar=self.config.calendar,
                 timezone=self.config.timezone,

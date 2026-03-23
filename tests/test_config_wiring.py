@@ -1001,6 +1001,7 @@ class TestFeedSpecConfigResolution:
         merged = config.merge_feed_spec(config.feed_spec)
 
         assert merged is config
+        assert config.merge_feed_spec(None) is config
 
 
 class TestConfigModelWiring:
