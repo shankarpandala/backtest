@@ -19,6 +19,7 @@ from ..strategy import Strategy
 
 if TYPE_CHECKING:
     from ..broker import Broker
+    from ..config import BacktestConfig
 
 
 def _use_fractional(allow_fractional: bool | None, broker: Broker) -> bool:
@@ -341,15 +342,15 @@ class LongShortStrategy(Strategy):
         self,
         broker: Any,
         timestamps: Sequence[datetime],
-        config: Any | None = None,
+        config: BacktestConfig | None = None,
     ) -> None:
         """Resolve optional schedule-based rebalance gating before the run starts."""
         if self.rebalance_schedule is None:
             self._resolved_schedule = None
             return
-        calendar = getattr(config, "resolved_calendar", None) if config is not None else None
-        timezone = getattr(config, "resolved_timezone", "UTC") if config is not None else "UTC"
-        feed_spec = getattr(config, "resolved_feed_spec", None) if config is not None else None
+        calendar = config.resolved_calendar if config is not None else None
+        timezone = config.resolved_timezone if config is not None else "UTC"
+        feed_spec = config.resolved_feed_spec if config is not None else None
         resolved = resolve_rebalance_timestamps(
             timestamps,
             self.rebalance_schedule,

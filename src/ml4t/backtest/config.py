@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from .feed_spec import FeedSpec
+from .feed_spec import FeedSpec, TimestampSemantics
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
 
 
@@ -546,18 +546,20 @@ class BacktestConfig:
 
     @property
     def resolved_timezone(self) -> str:
+        """Effective runtime timezone with UTC fallback."""
         return self.resolved_feed_spec.timezone or "UTC"
 
     @property
     def resolved_data_frequency(self) -> DataFrequency:
-        return self.data_frequency
+        resolved_frequency = self.resolved_feed_spec.to_backtest_frequency()
+        return resolved_frequency or self.data_frequency
 
     @property
     def resolved_session_start_time(self) -> str | None:
         return self.resolved_feed_spec.session_start_time
 
     @property
-    def resolved_timestamp_semantics(self):
+    def resolved_timestamp_semantics(self) -> TimestampSemantics | None:
         return self.resolved_feed_spec.timestamp_semantics
 
     def merge_feed_spec(self, feed_spec: FeedSpec | Any | None) -> BacktestConfig:

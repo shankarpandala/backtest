@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -18,6 +19,9 @@ from .metrics import (
     sortino_ratio,
     volatility,
 )
+
+if TYPE_CHECKING:
+    from ..config import BacktestConfig
 
 
 @dataclass
@@ -99,7 +103,7 @@ class EquityCurve:
         return float(inferred)
 
     @classmethod
-    def from_config(cls, config) -> EquityCurve:
+    def from_config(cls, config: BacktestConfig) -> EquityCurve:
         """Create an equity curve with annualization metadata derived from config."""
         feed_spec = config.resolved_feed_spec
         periods_per_year = resolve_periods_per_year(
