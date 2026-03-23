@@ -17,9 +17,11 @@ from ml4t.backtest import (
     BacktestConfig,
     Broker,
     ExecutionMode,
+    FeedSpec,
 )
 from ml4t.backtest.config import (
     CommissionType,
+    DataFrequency,
     EntryOrderPriority,
     FillOrdering,
     ShareType,
@@ -887,6 +889,46 @@ class TestFromDictDefaultParity:
         assert from_empty.allow_short_selling == default.allow_short_selling
         assert from_empty.allow_leverage == default.allow_leverage
         assert from_empty.settlement_delay == default.settlement_delay
+
+
+class TestFeedSpecConfigResolution:
+    def test_constructor_canonicalizes_feed_spec_metadata(self):
+        config = BacktestConfig(
+            feed_spec={
+                "calendar": "NYSE",
+                "timezone": "America/New_York",
+                "data_frequency": "minute",
+            }
+        )
+
+        assert isinstance(config.feed_spec, FeedSpec)
+        assert config.calendar == "NYSE"
+        assert config.timezone == "America/New_York"
+        assert config.data_frequency == DataFrequency.MINUTE_1
+        assert config.resolved_feed_spec.calendar == "NYSE"
+        assert config.resolved_feed_spec.timezone == "America/New_York"
+        assert config.resolved_feed_spec.data_frequency == DataFrequency.MINUTE_1
+
+    def test_resolved_feed_spec_preserves_explicit_runtime_over_feed_metadata(self):
+        config = BacktestConfig(
+            timezone="UTC",
+            data_frequency=DataFrequency.DAILY,
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+                session_start_time="17:00",
+            ),
+        )
+
+        assert config.feed_spec is not None
+        assert config.feed_spec.timezone == "America/New_York"
+        assert config.timezone == "UTC"
+        assert config.data_frequency == DataFrequency.DAILY
+        assert config.resolved_feed_spec.calendar == "NYSE"
+        assert config.resolved_feed_spec.timezone == "UTC"
+        assert config.resolved_feed_spec.data_frequency == DataFrequency.DAILY
+        assert config.resolved_feed_spec.session_start_time == "17:00"
 
 
 class TestConfigModelWiring:

@@ -22,13 +22,14 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .feed_spec import FeedSpec
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
 
 
@@ -498,7 +499,7 @@ class BacktestConfig:
 
     # === Metadata ===
     preset_name: str | None = None  # Name of preset this was loaded from
-    feed_spec: Any | None = field(default=None, repr=False, compare=False)
+    feed_spec: FeedSpec | None = field(default=None, repr=False, compare=False)
     _explicit_timezone: bool = field(default=False, init=False, repr=False, compare=False)
     _explicit_data_frequency: bool = field(default=False, init=False, repr=False, compare=False)
 
@@ -516,6 +517,57 @@ class BacktestConfig:
         self._explicit_data_frequency = "data_frequency" in provided
         if hasattr(self, "_provided_init_fields"):
             delattr(self, "_provided_init_fields")
+        if self.feed_spec is None:
+            return
+
+        self.feed_spec = FeedSpec.from_any(self.feed_spec)
+        if self.calendar is None and self.feed_spec.calendar:
+            self.calendar = self.feed_spec.calendar
+        if not self._explicit_timezone and self.feed_spec.timezone:
+            self.timezone = self.feed_spec.timezone
+
+        spec_frequency = self.feed_spec.to_backtest_frequency()
+        if not self._explicit_data_frequency and spec_frequency is not None:
+            self.data_frequency = spec_frequency
+
+    @property
+    def resolved_feed_spec(self) -> FeedSpec:
+        """Effective feed metadata after applying runtime config precedence."""
+        base = self.feed_spec if self.feed_spec is not None else FeedSpec()
+        return base.with_overrides(
+            calendar=self.calendar,
+            timezone=self.timezone,
+            data_frequency=self.data_frequency,
+        )
+
+    def merge_feed_spec(self, feed_spec: FeedSpec | Any | None) -> BacktestConfig:
+        """Fill missing runtime config from feed metadata without mutating user config."""
+        effective_feed_spec = self.feed_spec if self.feed_spec is not None else feed_spec
+        if effective_feed_spec is None:
+            return self
+
+        effective_feed_spec = FeedSpec.from_any(effective_feed_spec)
+        updates: dict[str, Any] = {"feed_spec": effective_feed_spec}
+        if self.calendar is None and effective_feed_spec.calendar:
+            updates["calendar"] = effective_feed_spec.calendar
+        if not self._explicit_timezone and effective_feed_spec.timezone:
+            updates["timezone"] = effective_feed_spec.timezone
+
+        spec_frequency = effective_feed_spec.to_backtest_frequency()
+        if (
+            not self._explicit_data_frequency
+            and spec_frequency is not None
+            and spec_frequency != self.data_frequency
+        ):
+            updates["data_frequency"] = spec_frequency
+
+        if len(updates) == 1 and self.feed_spec == effective_feed_spec:
+            return self
+
+        merged = replace(self, **updates)
+        merged._explicit_timezone = self._explicit_timezone
+        merged._explicit_data_frequency = self._explicit_data_frequency
+        return merged
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""

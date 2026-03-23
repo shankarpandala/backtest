@@ -40,7 +40,7 @@ _DEFAULT_SESSION_MINUTES = 390.0
 def get_annualization_factor(calendar: str | None) -> int:
     """Get annualization factor for a trading calendar."""
     if calendar is None:
-        return 252
+        return int(_DEFAULT_TRADING_DAYS_PER_YEAR)
 
     cal_upper = calendar.upper()
     for name, factor in _ANNUALIZATION_FACTORS.items():
@@ -54,7 +54,7 @@ def get_annualization_factor(calendar: str | None) -> int:
         schedule = cal.schedule("2024-01-01", "2024-12-31")
         return len(schedule)
     except Exception:
-        return 252
+        return int(_DEFAULT_TRADING_DAYS_PER_YEAR)
 
 
 def resolve_periods_per_year(
@@ -79,9 +79,6 @@ def resolve_periods_per_year(
         session_minutes = _DEFAULT_SESSION_MINUTES
 
     annual_days = float(get_annualization_factor(calendar))
-    if calendar is None:
-        annual_days = _DEFAULT_TRADING_DAYS_PER_YEAR
-
     return float(annual_days * (session_minutes / bar_minutes))
 
 
