@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from .config import DataFrequency
 
 
 class TimestampSemantics(str, Enum):
@@ -144,7 +147,7 @@ class FeedSpec:
             f"got columns {list(columns)}"
         )
 
-    def to_backtest_frequency(self):
+    def to_backtest_frequency(self) -> DataFrequency | None:
         """Map external frequency metadata onto backtest runtime frequency."""
         if self.data_frequency is None:
             return None
