@@ -4,8 +4,10 @@ from pathlib import Path
 
 from ml4t.backtest.artifact_spec import (
     ArtifactKind,
+    FeatureSpec,
     LabelSpec,
     MarketDataSpec,
+    PredictionSpec,
     TimestampSemantics,
 )
 from ml4t.backtest.feed_spec import FeedSpec
@@ -88,6 +90,19 @@ def test_market_data_spec_to_feed_spec_preserves_quote_and_temporal_fields() -> 
     assert feed_spec.timestamp_semantics == TimestampSemantics.BAR_CLOSE
 
 
+def test_market_data_schema_keeps_close_default_when_only_price_col_is_overridden() -> None:
+    spec = MarketDataSpec.from_mapping(
+        {
+            "artifact_id": "nasdaq100_1m_nbbo_v1",
+            "kind": "market_data",
+            "schema": {"price_col": "mid_close"},
+        }
+    )
+
+    assert spec.schema.price_col == "mid_close"
+    assert spec.schema.close_col == "close"
+
+
 def test_runtime_metadata_helper_returns_feed_semantics() -> None:
     metadata = market_data_spec_to_runtime_metadata(
         {
@@ -143,6 +158,23 @@ def test_spec_io_yaml_round_trip(tmp_path: Path) -> None:
     assert loaded == spec
 
 
+def test_spec_io_json_round_trip(tmp_path: Path) -> None:
+    spec = MarketDataSpec.from_mapping(
+        {
+            "artifact_id": "us_equities_daily_bars_v1",
+            "kind": "market_data",
+            "storage": {"path": "labels/prices.parquet", "format": "parquet"},
+            "schema": {"close_col": "adj_close"},
+            "semantics": {"data_frequency": "1d", "timestamp_semantics": "bar_close"},
+        }
+    )
+
+    path = dump_spec(spec, tmp_path / "market_data.json")
+    loaded = load_market_data_spec(path)
+
+    assert loaded == spec
+
+
 def test_load_spec_dispatches_label_spec() -> None:
     spec = load_spec(
         {
@@ -166,3 +198,50 @@ def test_load_spec_dispatches_label_spec() -> None:
     assert isinstance(spec, LabelSpec)
     assert spec.definition.buffer == "1D"
     assert spec.schema.label_col == "fwd_ret_1d"
+
+
+def test_load_spec_dispatches_feature_spec() -> None:
+    spec = load_spec(
+        {
+            "artifact_id": "us_equities_financial_features_v1",
+            "kind": "features",
+            "schema": {
+                "timestamp_col": "timestamp",
+                "entity_col": "symbol",
+                "feature_columns": ["mom_21", "vol_21"],
+            },
+            "definition": {
+                "family": "financial",
+                "join_keys": ["timestamp", "symbol"],
+                "source_artifacts": ["us_equities_daily_bars_v1"],
+            },
+        }
+    )
+
+    assert isinstance(spec, FeatureSpec)
+    assert spec.schema.feature_columns == ("mom_21", "vol_21")
+    assert spec.definition.source_artifacts == ("us_equities_daily_bars_v1",)
+
+
+def test_load_spec_dispatches_prediction_spec() -> None:
+    spec = load_spec(
+        {
+            "artifact_id": "us_equities_preds_v1",
+            "kind": "predictions",
+            "schema": {
+                "timestamp_col": "timestamp",
+                "entity_col": "symbol",
+                "prediction_col": "prediction",
+            },
+            "definition": {
+                "split_protocol": "walk_forward_oos",
+                "label_artifact": "us_equities_fwd_ret_1d_v1",
+                "feature_artifacts": ["us_equities_financial_features_v1"],
+                "training_hash": "abc123",
+            },
+        }
+    )
+
+    assert isinstance(spec, PredictionSpec)
+    assert spec.definition.feature_artifacts == ("us_equities_financial_features_v1",)
+    assert spec.definition.training_hash == "abc123"

@@ -102,11 +102,11 @@ class MarketDataSchema:
         return cls(
             timestamp_col=str(mapping.get("timestamp_col", "timestamp")),
             entity_col=str(mapping.get("entity_col", "symbol")),
-            price_col=str(mapping.get("price_col", mapping.get("close_col", "close"))),
+            price_col=str(mapping.get("price_col", "close")),
             open_col=str(mapping.get("open_col", "open")),
             high_col=str(mapping.get("high_col", "high")),
             low_col=str(mapping.get("low_col", "low")),
-            close_col=str(mapping.get("close_col", mapping.get("price_col", "close"))),
+            close_col=str(mapping.get("close_col", "close")),
             volume_col=str(mapping.get("volume_col", "volume")),
             bid_col=_optional_str(mapping.get("bid_col")),
             ask_col=_optional_str(mapping.get("ask_col")),
