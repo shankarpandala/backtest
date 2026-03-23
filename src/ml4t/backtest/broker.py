@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from .accounting.policy import AccountPolicy
     from .config import BacktestConfig
     from .execution import ExecutionLimits, MarketImpactModel
+    from .risk.position import PositionRule
 
 
 class Broker:
@@ -588,7 +589,7 @@ class Broker:
 
     # === Risk Management ===
 
-    def set_position_rules(self, rules, asset: str | None = None) -> None:
+    def set_position_rules(self, rules: PositionRule, asset: str | None = None) -> None:
         """Set position rules globally or per-asset.
 
         Args:

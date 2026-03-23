@@ -116,11 +116,9 @@ dev = [
 
 # Documentation dependencies
 docs = [
-    "sphinx>=7.0.0",
-    "sphinx-rtd-theme>=1.3.0",
-    "sphinx-autodoc-typehints>=1.24.0",
-    "myst-parser>=2.0.0",
-    "nbsphinx>=0.9.0",
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
 ]
 
 # All optional dependencies
@@ -129,11 +127,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ml4t/ml4t-backtest"
-Documentation = "https://ml4t-backtest.readthedocs.io"
-Repository = "https://github.com/ml4t/ml4t-backtest"
-Issues = "https://github.com/ml4t/ml4t-backtest/issues"
-Changelog = "https://github.com/ml4t/ml4t-backtest/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ml4t/backtest"
+Documentation = "https://ml4trading.io/docs/backtest/"
+Repository = "https://github.com/ml4t/backtest"
+Issues = "https://github.com/ml4t/backtest/issues"
+Changelog = "https://github.com/ml4t/backtest/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
