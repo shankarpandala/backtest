@@ -101,9 +101,10 @@ class EquityCurve:
     @classmethod
     def from_config(cls, config) -> EquityCurve:
         """Create an equity curve with annualization metadata derived from config."""
+        feed_spec = config.resolved_feed_spec
         periods_per_year = resolve_periods_per_year(
-            getattr(config, "data_frequency", None),
-            calendar=getattr(config, "calendar", None),
+            feed_spec.data_frequency,
+            calendar=feed_spec.calendar,
         )
         return cls(periods_per_year_override=periods_per_year)
 

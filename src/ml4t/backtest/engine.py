@@ -10,6 +10,7 @@ import polars as pl
 from .analytics import EquityCurve, TradeAnalyzer
 from .analytics.metrics import calmar_ratio
 from .broker import Broker
+from .config import DataFrequency
 from .datafeed import DataFeed
 from .strategy import Strategy
 from .types import ExecutionMode
@@ -101,10 +102,10 @@ class Engine:
         """
         # Lazy calendar initialization (zero cost if unused)
         is_trading_day_fn = None
-        if self.config and self.config.calendar:
+        if self.config and self.config.resolved_calendar:
             from .calendar import get_calendar, is_trading_day
 
-            self._calendar = get_calendar(self.config.calendar)
+            self._calendar = get_calendar(self.config.resolved_calendar)
             is_trading_day_fn = is_trading_day
 
         self.strategy.on_prepare(self.broker, self.feed.timestamps, self.config)
@@ -115,7 +116,7 @@ class Engine:
 
         for timestamp, assets_data, context in self.feed:
             # Calendar session enforcement
-            calendar_id = self.config.calendar if self.config else None
+            calendar_id = self.config.resolved_calendar if self.config else None
             if (
                 self._calendar
                 and calendar_id
@@ -124,7 +125,7 @@ class Engine:
                 and is_trading_day_fn
             ):
                 # For daily data, check trading day; for intraday, check market hours
-                if self.config.data_frequency.value == "daily":
+                if self.config.resolved_data_frequency == DataFrequency.DAILY:
                     if not is_trading_day_fn(calendar_id, timestamp.date()):
                         self._skipped_bars += 1
                         continue

@@ -81,7 +81,7 @@ class BacktestResult:
 
     def _auto_session_aligned(self, calendar: str | None = None) -> bool:
         timestamps = [ts for ts, _ in self.equity_curve]
-        resolved_calendar = calendar or (self.config.calendar if self.config else None)
+        resolved_calendar = calendar or (self.config.resolved_calendar if self.config else None)
         return should_session_align(
             calendar=resolved_calendar,
             feed_spec=self._feed_spec(),
@@ -226,16 +226,14 @@ class BacktestResult:
         # Build equity DataFrame
         equity_df = self.to_equity_dataframe()
 
-        if session_aligned and self.config and self.config.calendar:
+        if session_aligned and self.config and self.config.resolved_calendar:
             # Use session alignment
             from .sessions import SessionConfig, compute_session_pnl
 
-            feed_spec = self._feed_spec()
-            assert feed_spec is not None
             session_config = SessionConfig(
-                calendar=self.config.calendar,
-                timezone=self.config.timezone,
-                session_start_time=feed_spec.session_start_time,
+                calendar=self.config.resolved_calendar,
+                timezone=self.config.resolved_timezone,
+                session_start_time=self.config.resolved_session_start_time,
             )
             return compute_session_pnl(self.equity_curve, session_config)
 
@@ -314,7 +312,7 @@ class BacktestResult:
         """
         # Determine session alignment
         if session_aligned is None:
-            cal = calendar or (self.config.calendar if self.config else None)
+            cal = calendar or (self.config.resolved_calendar if self.config else None)
             session_aligned = self._auto_session_aligned(cal)
 
         # Get daily P&L DataFrame
@@ -392,7 +390,7 @@ class BacktestResult:
             ) from e
 
         # Determine calendar and annualization
-        cal = calendar or (self.config.calendar if self.config else None)
+        cal = calendar or (self.config.resolved_calendar if self.config else None)
         periods_per_year = _get_annualization_factor(cal)
         session_aligned = self._auto_session_aligned(cal)
 
@@ -475,7 +473,7 @@ class BacktestResult:
             ) from e
 
         # Get calendar and annualization factor
-        cal = calendar or (self.config.calendar if self.config else None)
+        cal = calendar or (self.config.resolved_calendar if self.config else None)
         annualization_factor = _get_annualization_factor(cal)
 
         # Get daily returns

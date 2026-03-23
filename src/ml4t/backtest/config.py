@@ -540,6 +540,26 @@ class BacktestConfig:
             data_frequency=self.data_frequency,
         )
 
+    @property
+    def resolved_calendar(self) -> str | None:
+        return self.resolved_feed_spec.calendar
+
+    @property
+    def resolved_timezone(self) -> str:
+        return self.resolved_feed_spec.timezone or "UTC"
+
+    @property
+    def resolved_data_frequency(self) -> DataFrequency:
+        return self.data_frequency
+
+    @property
+    def resolved_session_start_time(self) -> str | None:
+        return self.resolved_feed_spec.session_start_time
+
+    @property
+    def resolved_timestamp_semantics(self):
+        return self.resolved_feed_spec.timestamp_semantics
+
     def merge_feed_spec(self, feed_spec: FeedSpec | Any | None) -> BacktestConfig:
         """Fill missing runtime config from feed metadata without mutating user config."""
         effective_feed_spec = self.feed_spec if self.feed_spec is not None else feed_spec

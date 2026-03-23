@@ -905,6 +905,9 @@ class TestFeedSpecConfigResolution:
         assert config.calendar == "NYSE"
         assert config.timezone == "America/New_York"
         assert config.data_frequency == DataFrequency.MINUTE_1
+        assert config.resolved_calendar == "NYSE"
+        assert config.resolved_timezone == "America/New_York"
+        assert config.resolved_data_frequency == DataFrequency.MINUTE_1
         assert config.resolved_feed_spec.calendar == "NYSE"
         assert config.resolved_feed_spec.timezone == "America/New_York"
         assert config.resolved_feed_spec.data_frequency == DataFrequency.MINUTE_1
@@ -925,6 +928,10 @@ class TestFeedSpecConfigResolution:
         assert config.feed_spec.timezone == "America/New_York"
         assert config.timezone == "UTC"
         assert config.data_frequency == DataFrequency.DAILY
+        assert config.resolved_calendar == "NYSE"
+        assert config.resolved_timezone == "UTC"
+        assert config.resolved_data_frequency == DataFrequency.DAILY
+        assert config.resolved_session_start_time == "17:00"
         assert config.resolved_feed_spec.calendar == "NYSE"
         assert config.resolved_feed_spec.timezone == "UTC"
         assert config.resolved_feed_spec.data_frequency == DataFrequency.DAILY

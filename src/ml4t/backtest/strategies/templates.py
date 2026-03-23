@@ -347,8 +347,8 @@ class LongShortStrategy(Strategy):
         if self.rebalance_schedule is None:
             self._resolved_schedule = None
             return
-        calendar = getattr(config, "calendar", None) if config is not None else None
-        timezone = getattr(config, "timezone", "UTC") if config is not None else "UTC"
+        calendar = getattr(config, "resolved_calendar", None) if config is not None else None
+        timezone = getattr(config, "resolved_timezone", "UTC") if config is not None else "UTC"
         feed_spec = getattr(config, "resolved_feed_spec", None) if config is not None else None
         resolved = resolve_rebalance_timestamps(
             timestamps,
