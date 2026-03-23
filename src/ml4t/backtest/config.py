@@ -550,7 +550,11 @@ class BacktestConfig:
         updates: dict[str, Any] = {"feed_spec": effective_feed_spec}
         if self.calendar is None and effective_feed_spec.calendar:
             updates["calendar"] = effective_feed_spec.calendar
-        if not self._explicit_timezone and effective_feed_spec.timezone:
+        if (
+            not self._explicit_timezone
+            and effective_feed_spec.timezone
+            and effective_feed_spec.timezone != self.timezone
+        ):
             updates["timezone"] = effective_feed_spec.timezone
 
         spec_frequency = effective_feed_spec.to_backtest_frequency()

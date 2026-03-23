@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import polars as pl
 
 from .analytics.annualization import get_annualization_factor, should_session_align
+from .feed_spec import FeedSpec
 from .types import Fill, Trade
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ class BacktestResult:
     _trades_df: pl.DataFrame | None = field(default=None, repr=False)
     _equity_df: pl.DataFrame | None = field(default=None, repr=False)
 
-    def _feed_spec(self):
+    def _feed_spec(self) -> FeedSpec | None:
         if self.config is None:
             return None
         return self.config.resolved_feed_spec
@@ -233,11 +234,7 @@ class BacktestResult:
             session_config = SessionConfig(
                 calendar=self.config.calendar,
                 timezone=self.config.timezone,
-                session_start_time=(
-                    feed_spec.session_start_time
-                    if feed_spec is not None
-                    else getattr(self.config, "session_start_time", None)
-                ),
+                session_start_time=feed_spec.session_start_time,
             )
             return compute_session_pnl(self.equity_curve, session_config)
 

@@ -930,6 +930,78 @@ class TestFeedSpecConfigResolution:
         assert config.resolved_feed_spec.data_frequency == DataFrequency.DAILY
         assert config.resolved_feed_spec.session_start_time == "17:00"
 
+    def test_merge_feed_spec_fills_missing_runtime_fields(self):
+        config = BacktestConfig()
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        assert merged is not config
+        assert merged.feed_spec is not None
+        assert merged.calendar == "NYSE"
+        assert merged.timezone == "America/New_York"
+        assert merged.data_frequency == DataFrequency.MINUTE_1
+        assert merged._explicit_timezone is False
+        assert merged._explicit_data_frequency is False
+
+    def test_merge_feed_spec_preserves_explicit_runtime_fields(self):
+        config = BacktestConfig(timezone="UTC", data_frequency=DataFrequency.DAILY)
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        assert merged.calendar == "NYSE"
+        assert merged.timezone == "UTC"
+        assert merged.data_frequency == DataFrequency.DAILY
+        assert merged._explicit_timezone is True
+        assert merged._explicit_data_frequency is True
+
+    def test_merge_feed_spec_ignores_runtime_argument_when_constructor_spec_exists(self):
+        config = BacktestConfig(
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="CME_Equity",
+                timezone="America/Chicago",
+                data_frequency="daily",
+            )
+        )
+
+        assert merged is config
+        assert merged.feed_spec is not None
+        assert merged.feed_spec.calendar == "NYSE"
+        assert merged.feed_spec.timezone == "America/New_York"
+        assert merged.feed_spec.data_frequency == "minute"
+
+    def test_merge_feed_spec_returns_identity_when_no_updates_are_needed(self):
+        config = BacktestConfig(
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        merged = config.merge_feed_spec(config.feed_spec)
+
+        assert merged is config
+
 
 class TestConfigModelWiring:
     """All commission/slippage enum choices should map to model instances."""
