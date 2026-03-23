@@ -172,11 +172,8 @@ def _resolve_schedule_metadata(
     spec = FeedSpec.from_any(feed_spec) if feed_spec is not None else None
 
     resolved_calendar = calendar if calendar is not None else (spec.calendar if spec else None)
-    resolved_timezone = timezone
-    timezone_explicit = timezone is not None
-    if spec and spec.timezone:
-        resolved_timezone = spec.timezone
-        timezone_explicit = True
+    resolved_timezone = timezone if timezone is not None else (spec.timezone if spec else None)
+    timezone_explicit = resolved_timezone is not None
     if resolved_timezone is None:
         resolved_timezone = "UTC"
     resolved_session_start = (

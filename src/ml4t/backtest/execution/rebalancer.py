@@ -22,12 +22,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import polars as pl
 
 if TYPE_CHECKING:
     from ..broker import Broker
+    from ..feed_spec import FeedSpec
     from ..types import Order
 
 from ..config import RebalanceMode, ShareType
@@ -122,7 +123,7 @@ class TargetWeightExecutor:
         self,
         available_timestamps: Sequence[datetime] | pl.Series,
         *,
-        feed_spec: object | None = None,
+        feed_spec: FeedSpec | Any | None = None,
         calendar: str | None = None,
         timezone: str | None = None,
         session_start_time: str | None = None,
