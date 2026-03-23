@@ -9,6 +9,8 @@ from typing import Any
 
 import polars as pl
 
+from .feed_spec import FeedSpec
+
 
 class _AssetsData(dict[str, dict[str, Any]]):
     """Internal per-bar payload with pre-extracted broker views."""
@@ -56,7 +58,15 @@ class DataFeed:
         signals_df: pl.DataFrame | None = None,
         context_df: pl.DataFrame | None = None,
         *,
+        feed_spec: FeedSpec | Any | None = None,
+        contract: FeedSpec | Any | None = None,
         entity_col: str | None = None,
+        timestamp_col: str | None = None,
+        open_col: str | None = None,
+        high_col: str | None = None,
+        low_col: str | None = None,
+        close_col: str | None = None,
+        volume_col: str | None = None,
     ):
         self.prices = (
             prices_df
@@ -77,8 +87,24 @@ class DataFeed:
         if self.prices is None:
             raise ValueError("prices_path or prices_df required")
 
-        # Resolve entity column name
-        self._entity_col = self._resolve_entity_col(entity_col, self.prices.columns)
+        raw_spec = FeedSpec.from_any(feed_spec if feed_spec is not None else contract)
+        self.feed_spec = raw_spec.with_overrides(
+            entity_col=entity_col,
+            timestamp_col=timestamp_col,
+            open_col=open_col,
+            high_col=high_col,
+            low_col=low_col,
+            close_col=close_col,
+            volume_col=volume_col,
+        ).resolve(self.prices.columns, self.ENTITY_COL_CANDIDATES)
+        self.contract = self.feed_spec
+        self._timestamp_col = self.feed_spec.timestamp_col
+        self._entity_col = self.feed_spec.entity_col
+        self._open_col = self.feed_spec.open_col
+        self._high_col = self.feed_spec.high_col
+        self._low_col = self.feed_spec.low_col
+        self._close_col = self.feed_spec.close_col
+        self._volume_col = self.feed_spec.volume_col
 
         # Pre-partition data by timestamp for O(1) lookups
         # Store DataFrames (memory efficient) instead of dicts (memory explosion)
@@ -93,26 +119,38 @@ class DataFeed:
         self._timestamps = self._get_timestamps()
         self._idx = 0
         self._signal_columns = (
-            [c for c in self.signals.columns if c not in ("timestamp", self._entity_col)]
+            [c for c in self.signals.columns if c not in (self._timestamp_col, self._entity_col)]
             if self.signals is not None
             else []
         )
         self._context_columns = (
-            [c for c in self.context.columns if c != "timestamp"]
+            [c for c in self.context.columns if c != self._timestamp_col]
             if self.context is not None
             else []
         )
 
         price_cols = self.prices.columns
         self._price_asset_idx = price_cols.index(self._entity_col)
-        self._price_open_idx = price_cols.index("open") if "open" in price_cols else -1
-        self._price_high_idx = price_cols.index("high") if "high" in price_cols else -1
-        self._price_low_idx = price_cols.index("low") if "low" in price_cols else -1
-        self._price_close_idx = price_cols.index("close") if "close" in price_cols else -1
-        self._price_volume_idx = price_cols.index("volume") if "volume" in price_cols else -1
+        self._price_open_idx = (
+            price_cols.index(self._open_col) if self._open_col in price_cols else -1
+        )
+        self._price_high_idx = (
+            price_cols.index(self._high_col) if self._high_col in price_cols else -1
+        )
+        self._price_low_idx = price_cols.index(self._low_col) if self._low_col in price_cols else -1
+        self._price_close_idx = (
+            price_cols.index(self._close_col) if self._close_col in price_cols else -1
+        )
+        self._price_volume_idx = (
+            price_cols.index(self._volume_col) if self._volume_col in price_cols else -1
+        )
 
         if self.signals is not None:
             signal_cols = self.signals.columns
+            if self._timestamp_col not in signal_cols:
+                raise ValueError(
+                    f"timestamp_col={self._timestamp_col!r} not found in signal columns {signal_cols}"
+                )
             self._signal_asset_idx = signal_cols.index(self._entity_col)
             self._signal_col_indices = [signal_cols.index(c) for c in self._signal_columns]
         else:
@@ -121,6 +159,10 @@ class DataFeed:
 
         if self.context is not None:
             context_cols = self.context.columns
+            if self._timestamp_col not in context_cols:
+                raise ValueError(
+                    f"timestamp_col={self._timestamp_col!r} not found in context columns {context_cols}"
+                )
             self._context_col_indices = [context_cols.index(c) for c in self._context_columns]
         else:
             self._context_col_indices = []
@@ -134,9 +176,7 @@ class DataFeed:
         """
         if explicit is not None:
             if explicit not in columns:
-                raise ValueError(
-                    f"entity_col={explicit!r} not found in columns {columns}"
-                )
+                raise ValueError(f"entity_col={explicit!r} not found in columns {columns}")
             return explicit
         for candidate in cls.ENTITY_COL_CANDIDATES:
             if candidate in columns:
@@ -153,8 +193,12 @@ class DataFeed:
         data in columnar format (minimal memory overhead).
         """
         result: dict[datetime, pl.DataFrame] = {}
-        for ts_df in df.partition_by("timestamp", maintain_order=True):
-            ts = ts_df["timestamp"][0]
+        if self._timestamp_col not in df.columns:
+            raise ValueError(
+                f"timestamp_col={self._timestamp_col!r} not found in columns {df.columns}"
+            )
+        for ts_df in df.partition_by(self._timestamp_col, maintain_order=True):
+            ts = ts_df[self._timestamp_col][0]
             result[ts] = ts_df
         return result
 
@@ -176,6 +220,11 @@ class DataFeed:
     def n_bars(self) -> int:
         """Number of unique timestamps/bars."""
         return len(self._timestamps)
+
+    @property
+    def timestamps(self) -> tuple[datetime, ...]:
+        """Unique feed timestamps in iteration order."""
+        return tuple(self._timestamps)
 
     def __next__(self) -> tuple[datetime, dict[str, dict], dict[str, Any]]:
         if self._idx >= len(self._timestamps):

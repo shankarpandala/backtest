@@ -13,6 +13,7 @@ def test_root_api_contains_only_intended_core_surface() -> None:
         "BacktestConfig",
         "BacktestResult",
         "CommissionType",
+        "FeedSpec",
         "OrderType",
         "OrderSide",
         "OrderStatus",

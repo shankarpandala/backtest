@@ -10,6 +10,7 @@ from ml4t.backtest import (
     DataFeed,
     Engine,
     ExecutionMode,
+    FeedSpec,
     OrderSide,
     OrderType,
     Strategy,
@@ -18,6 +19,7 @@ from ml4t.backtest import (
 from ml4t.backtest.config import (
     BacktestConfig,
     CommissionType,
+    DataFrequency,
     SlippageType,
 )
 from ml4t.backtest.models import PercentageCommission, VolumeShareSlippage
@@ -716,6 +718,57 @@ class TestRunBacktestWithConfig:
 
         assert results.equity_curve is not None
         assert len(results.equity_curve) == 10
+
+    def test_run_backtest_uses_feed_spec_for_runtime_config(self):
+        """Feed metadata should populate runtime config when explicit config is unset."""
+
+        class PrepareTrackingStrategy(Strategy):
+            def __init__(self):
+                self.seen_config = None
+
+            def on_prepare(self, broker, timestamps, config=None):
+                self.seen_config = config
+
+            def on_data(self, timestamp, data, context, broker):
+                return None
+
+        prices = pl.DataFrame(
+            {
+                "ts": [datetime(2024, 1, 1, 9, 30), datetime(2024, 1, 1, 9, 31)],
+                "ticker": ["AAPL", "AAPL"],
+                "open_px": [100.0, 101.0],
+                "high_px": [101.0, 102.0],
+                "low_px": [99.0, 100.0],
+                "close_px": [100.5, 101.5],
+                "vol": [1000.0, 1100.0],
+            }
+        )
+        strategy = PrepareTrackingStrategy()
+
+        result = run_backtest(
+            prices=prices,
+            strategy=strategy,
+            config=BacktestConfig(),
+            feed_spec=FeedSpec(
+                timestamp_col="ts",
+                entity_col="ticker",
+                open_col="open_px",
+                high_col="high_px",
+                low_col="low_px",
+                close_col="close_px",
+                volume_col="vol",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+        )
+
+        assert strategy.seen_config is not None
+        assert strategy.seen_config.calendar == "NYSE"
+        assert strategy.seen_config.timezone == "America/New_York"
+        assert strategy.seen_config.data_frequency == DataFrequency.MINUTE_1
+        assert result.config is not None
+        assert result.config.calendar == "NYSE"
 
 
 class TestEmptyDataFeed:

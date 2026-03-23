@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import polars as pl
 import pytest
 
-from ml4t.backtest import DataFeed
+from ml4t.backtest import DataFeed, FeedSpec
 
 
 class TestDataFeedMemoryEfficiency:
@@ -365,3 +365,104 @@ class TestDataFeedEntityColumn:
         feed = DataFeed(prices_df=prices, signals_df=signals)
         _ts, data, _ctx = next(iter(feed))
         assert data["AAPL"]["signals"]["momentum"] == 0.5
+
+
+class TestDataFeedContracts:
+    """Tests for shared feed contract support."""
+
+    def test_feed_spec_mapping_supports_custom_columns(self):
+        prices = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["MSFT"],
+                "open_px": [100.0],
+                "high_px": [101.0],
+                "low_px": [99.0],
+                "last_px": [100.5],
+                "vol": [1_000_000],
+            }
+        )
+        signals = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["MSFT"],
+                "score": [0.75],
+            }
+        )
+        context = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "regime": ["risk_on"],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            signals_df=signals,
+            context_df=context,
+            feed_spec={
+                "timestamp_col": "time",
+                "entity_col": "ticker",
+                "open_col": "open_px",
+                "high_col": "high_px",
+                "low_col": "low_px",
+                "close_col": "last_px",
+                "volume_col": "vol",
+            },
+        )
+
+        ts, data, ctx = next(iter(feed))
+        assert ts == datetime(2020, 1, 1)
+        assert feed.feed_spec.timestamp_col == "time"
+        assert feed._entity_col == "ticker"
+        assert data["MSFT"]["open"] == 100.0
+        assert data["MSFT"]["close"] == 100.5
+        assert data["MSFT"]["signals"]["score"] == 0.75
+        assert ctx["regime"] == "risk_on"
+
+    def test_feed_spec_object_uses_price_col_as_close_fallback(self):
+        class EngineerLikeContract:
+            timestamp_col = "ts"
+            symbol_col = "ticker"
+            price_col = "last_price"
+            open_col = "open_price"
+            high_col = "high_price"
+            low_col = "low_price"
+            volume_col = "size"
+
+        prices = pl.DataFrame(
+            {
+                "ts": [datetime(2020, 1, 1)],
+                "ticker": ["ES"],
+                "open_price": [4500.0],
+                "high_price": [4510.0],
+                "low_price": [4495.0],
+                "last_price": [4502.0],
+                "size": [1250],
+            }
+        )
+
+        feed = DataFeed(prices_df=prices, contract=EngineerLikeContract())
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["ES"]["close"] == 4502.0
+        assert feed.feed_spec.close_col == "last_price"
+
+    def test_explicit_kwargs_override_feed_spec(self):
+        prices = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["AAPL"],
+                "close_a": [100.0],
+                "close_b": [101.0],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(timestamp_col="time", entity_col="ticker", close_col="close_a"),
+            close_col="close_b",
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["AAPL"]["close"] == 101.0

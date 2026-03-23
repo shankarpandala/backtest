@@ -22,9 +22,10 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -497,6 +498,7 @@ class BacktestConfig:
 
     # === Metadata ===
     preset_name: str | None = None  # Name of preset this was loaded from
+    feed_spec: Any | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""

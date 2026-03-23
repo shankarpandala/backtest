@@ -11,6 +11,7 @@ from .engine import Engine
 from .execution.impact import LinearImpact
 from .execution.limits import VolumeParticipationLimit
 from .execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from .feed_spec import FeedSpec
 from .models import (
     FixedSlippage,
     NoCommission,
@@ -37,6 +38,7 @@ __all__ = [
     "BacktestConfig",
     "DataFeed",
     "Engine",
+    "FeedSpec",
     "ExecutionMode",
     "Strategy",
     "Order",

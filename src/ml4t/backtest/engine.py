@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -78,10 +79,10 @@ class Engine:
 
         self.feed = feed
         self.strategy = strategy
-        self.config = config
-        self.execution_mode = config.execution_mode
+        self.config = self._merge_feed_spec(config, getattr(feed, "feed_spec", None))
+        self.execution_mode = self.config.execution_mode
         self.broker = Broker.from_config(
-            config,
+            self.config,
             contract_specs=contract_specs,
             market_impact_model=market_impact_model,
             execution_limits=execution_limits,
@@ -91,6 +92,33 @@ class Engine:
         # Calendar session enforcement (lazy initialized in run())
         self._calendar = None
         self._skipped_bars = 0
+
+    @staticmethod
+    def _merge_feed_spec(config: BacktestConfig, feed_spec: Any | None) -> BacktestConfig:
+        """Fill missing runtime config from feed metadata without mutating user config."""
+        effective_feed_spec = (
+            config.feed_spec if getattr(config, "feed_spec", None) is not None else feed_spec
+        )
+        if effective_feed_spec is None:
+            return config
+
+        from .config import DataFrequency
+
+        updates: dict[str, Any] = {"feed_spec": effective_feed_spec}
+        if config.calendar is None and effective_feed_spec.calendar:
+            updates["calendar"] = effective_feed_spec.calendar
+        if config.timezone == "UTC" and effective_feed_spec.timezone:
+            updates["timezone"] = effective_feed_spec.timezone
+
+        spec_frequency = effective_feed_spec.to_backtest_frequency()
+        if (
+            config.data_frequency == DataFrequency.DAILY
+            and spec_frequency is not None
+            and spec_frequency != DataFrequency.DAILY
+        ):
+            updates["data_frequency"] = spec_frequency
+
+        return replace(config, **updates) if updates else config
 
     def run(self) -> BacktestResult:
         """Run backtest and return structured results.
@@ -107,6 +135,7 @@ class Engine:
             self._calendar = get_calendar(self.config.calendar)
             is_trading_day_fn = is_trading_day
 
+        self.strategy.on_prepare(self.broker, self.feed.timestamps, self.config)
         self.strategy.on_start(self.broker)
 
         # Date-level cache for trading day checks (significant speedup for intraday data)
@@ -361,6 +390,8 @@ def run_backtest(
     context: pl.DataFrame | str | None = None,
     config: BacktestConfig | str | None = None,
     *,
+    feed_spec: Any | None = None,
+    contract: Any | None = None,
     contract_specs: dict[str, Any] | None = None,
     market_impact_model: Any | None = None,
     execution_limits: Any | None = None,
@@ -373,6 +404,8 @@ def run_backtest(
         signals: Optional signals DataFrame or path
         context: Optional context DataFrame or path
         config: BacktestConfig instance, preset name (str), or None for defaults
+        feed_spec: Optional shared dataset contract for schema and temporal metadata
+        contract: Alias for feed_spec
         contract_specs: Per-asset contract specifications (futures multipliers, etc.)
         market_impact_model: Market impact model for fill simulation
         execution_limits: Execution limits (max order size, etc.)
@@ -402,6 +435,8 @@ def run_backtest(
         prices_df=prices if isinstance(prices, pl.DataFrame) else None,
         signals_df=signals if isinstance(signals, pl.DataFrame) else None,
         context_df=context if isinstance(context, pl.DataFrame) else None,
+        feed_spec=feed_spec,
+        contract=contract,
     )
 
     if isinstance(config, str):

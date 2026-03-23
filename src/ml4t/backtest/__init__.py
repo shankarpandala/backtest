@@ -20,6 +20,7 @@ from .engine import Engine, run_backtest
 
 # Execution: rebalancing
 from .execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from .feed_spec import FeedSpec
 from .result import BacktestResult
 
 # Risk management rules (position-level)
@@ -53,6 +54,7 @@ __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "CommissionType",
+    "FeedSpec",
     # Canonical domain types
     "OrderType",
     "OrderSide",
