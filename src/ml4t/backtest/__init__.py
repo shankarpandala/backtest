@@ -20,6 +20,7 @@ from .engine import Engine, run_backtest
 
 # Execution: rebalancing
 from .execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from .execution.schedule import RebalanceCadence, RebalanceSchedule, resolve_rebalance_timestamps
 from .feed_spec import FeedSpec
 from .result import BacktestResult
 
@@ -73,6 +74,9 @@ __all__ = [
     # Execution: rebalancing
     "RebalanceConfig",
     "TargetWeightExecutor",
+    "RebalanceCadence",
+    "RebalanceSchedule",
+    "resolve_rebalance_timestamps",
     # Risk rules
     "StopLoss",
     "TakeProfit",

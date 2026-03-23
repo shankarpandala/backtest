@@ -6,10 +6,12 @@ import pytest
 
 from ml4t.backtest import (
     Broker,
+    FeedSpec,
     OrderSide,
 )
 from ml4t.backtest.config import RebalanceMode
 from ml4t.backtest.execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from ml4t.backtest.execution.schedule import RebalanceSchedule
 from ml4t.backtest.models import NoCommission, NoSlippage
 
 
@@ -28,6 +30,7 @@ class TestRebalanceConfig:
         assert config.max_single_weight == 1.0
         assert config.cancel_before_rebalance is True
         assert config.account_for_pending is True
+        assert config.schedule is None
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -41,6 +44,13 @@ class TestRebalanceConfig:
         assert config.allow_fractional is True
         assert config.allow_short is True
         assert config.max_single_weight == 0.25
+
+    def test_schedule_can_be_configured(self):
+        """Test schedule-based rebalance configuration."""
+        config = RebalanceConfig(schedule=RebalanceSchedule.month_end())
+
+        assert config.schedule is not None
+        assert config.schedule.cadence.value == "month_end"
 
 
 class TestTargetWeightExecutorBasic:
@@ -331,6 +341,92 @@ class TestTargetWeightExecutorPendingOrders:
         effective = executor._get_effective_weights(broker, sample_data)
         assert "AAPL" in effective
         assert effective["AAPL"] > 0.2  # Should reflect pending order value
+
+
+class TestTargetWeightExecutorScheduling:
+    """Test schedule-gated execution."""
+
+    @pytest.fixture
+    def broker(self):
+        broker = Broker(
+            initial_cash=100000.0,
+            commission_model=NoCommission(),
+            slippage_model=NoSlippage(),
+        )
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 1000000},
+            {},
+        )
+        return broker
+
+    @pytest.fixture
+    def sample_data(self):
+        return {"AAPL": {"close": 150.0}}
+
+    def test_unscheduled_timestamp_skips_rebalance(self, broker, sample_data):
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(
+                schedule=RebalanceSchedule.explicit_timestamps([datetime(2024, 1, 2, 9, 30)])
+            )
+        )
+        executor.prepare_schedule([datetime(2024, 1, 1, 9, 30), datetime(2024, 1, 2, 9, 30)])
+
+        orders = executor.execute(
+            {"AAPL": 0.5},
+            sample_data,
+            broker,
+            timestamp=datetime(2024, 1, 1, 9, 30),
+        )
+
+        assert orders == []
+
+    def test_scheduled_timestamp_executes_rebalance(self, broker, sample_data):
+        scheduled_ts = datetime(2024, 1, 2, 9, 30)
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(schedule=RebalanceSchedule.explicit_timestamps([scheduled_ts]))
+        )
+        executor.prepare_schedule([datetime(2024, 1, 1, 9, 30), scheduled_ts])
+
+        orders = executor.execute(
+            {"AAPL": 0.5},
+            sample_data,
+            broker,
+            timestamp=scheduled_ts,
+        )
+
+        assert len(orders) == 1
+        assert orders[0].asset == "AAPL"
+
+    def test_prepare_schedule_uses_feed_semantics_for_daily_labels(self, broker, sample_data):
+        timestamps = [
+            datetime(2024, 1, 1),
+            datetime(2024, 1, 2),
+            datetime(2024, 1, 3),
+            datetime(2024, 1, 4),
+            datetime(2024, 1, 5),
+            datetime(2024, 1, 8),
+            datetime(2024, 1, 9),
+            datetime(2024, 1, 10),
+            datetime(2024, 1, 11),
+            datetime(2024, 1, 12),
+        ]
+        executor = TargetWeightExecutor(config=RebalanceConfig(schedule=RebalanceSchedule.weekly()))
+
+        resolved = executor.prepare_schedule(
+            timestamps,
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                data_frequency="daily",
+                timestamp_semantics="session_label",
+            ),
+        )
+
+        assert resolved == frozenset({datetime(2024, 1, 5), datetime(2024, 1, 12)})
 
 
 class TestTargetWeightExecutorCashTargeting:

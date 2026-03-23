@@ -11,6 +11,7 @@ from .engine import Engine
 from .execution.impact import LinearImpact
 from .execution.limits import VolumeParticipationLimit
 from .execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from .execution.schedule import RebalanceCadence, RebalanceSchedule, resolve_rebalance_timestamps
 from .feed_spec import FeedSpec
 from .models import (
     FixedSlippage,
@@ -57,6 +58,9 @@ __all__ = [
     "LinearImpact",
     "RebalanceConfig",
     "TargetWeightExecutor",
+    "RebalanceCadence",
+    "RebalanceSchedule",
+    "resolve_rebalance_timestamps",
     "WaterMarkSource",
     "TrailHwmSource",
     "InitialHwmSource",

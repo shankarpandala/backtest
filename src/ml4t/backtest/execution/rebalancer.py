@@ -17,7 +17,10 @@ Example:
     orders = executor.execute(target_weights, data, broker)
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -26,12 +29,13 @@ if TYPE_CHECKING:
 
 from ..config import RebalanceMode, ShareType
 from ..types import OrderSide
+from .schedule import RebalanceSchedule, resolve_rebalance_timestamps
 
 
 class WeightProvider(Protocol):
     """Protocol for anything that produces target weights."""
 
-    def get_weights(self, data: dict, broker: "Broker") -> dict[str, float]:
+    def get_weights(self, data: dict, broker: Broker) -> dict[str, float]:
         """Return target weights (asset -> weight, should sum to <= 1.0)."""
         ...
 
@@ -78,6 +82,7 @@ class RebalanceConfig:
     cancel_before_rebalance: bool = True
     account_for_pending: bool = True
     rebalance_mode: RebalanceMode = RebalanceMode.SNAPSHOT
+    schedule: RebalanceSchedule | None = None
 
 
 class TargetWeightExecutor:
@@ -108,13 +113,48 @@ class TargetWeightExecutor:
             config: Rebalancing configuration. Uses defaults if not provided.
         """
         self.config = config or RebalanceConfig()
+        self._resolved_schedule: frozenset[datetime] | None = None
+
+    def prepare_schedule(
+        self,
+        available_timestamps,
+        *,
+        feed_spec=None,
+        calendar: str | None = None,
+        timezone: str = "UTC",
+        session_start_time: str | None = None,
+    ) -> frozenset[datetime] | None:
+        """Resolve the configured schedule against a feed's available timestamps."""
+        if self.config.schedule is None:
+            self._resolved_schedule = None
+            return None
+        resolved = resolve_rebalance_timestamps(
+            available_timestamps,
+            self.config.schedule,
+            feed_spec=feed_spec,
+            calendar=calendar,
+            timezone=timezone,
+            session_start_time=session_start_time,
+        )
+        self._resolved_schedule = frozenset(resolved.to_list())
+        return self._resolved_schedule
+
+    def should_rebalance(self, timestamp: datetime) -> bool:
+        """Return whether the current timestamp is on the prepared schedule."""
+        if self.config.schedule is None:
+            return True
+        if self._resolved_schedule is None:
+            raise ValueError("prepare_schedule() must be called before scheduled execution")
+        return timestamp in self._resolved_schedule
 
     def execute(
         self,
         target_weights: dict[str, float],
         data: dict[str, dict],
-        broker: "Broker",
-    ) -> list["Order"]:
+        broker: Broker,
+        *,
+        timestamp: datetime | None = None,
+    ) -> list[Order]:
         """Execute rebalancing to target weights.
 
         Behavior depends on ``self.config.rebalance_mode``:
@@ -135,6 +175,12 @@ class TargetWeightExecutor:
         Returns:
             List of submitted orders.
         """
+        if self.config.schedule is not None:
+            if timestamp is None:
+                raise ValueError("timestamp is required when RebalanceConfig.schedule is set")
+            if not self.should_rebalance(timestamp):
+                return []
+
         # 1. Cancel pending orders if configured (prevents double-allocation)
         if self.config.cancel_before_rebalance:
             for pending_order in list(broker.pending_orders):
@@ -221,8 +267,8 @@ class TargetWeightExecutor:
         current_weights: dict[str, float],
         equity: float,
         data: dict[str, dict],
-        broker: "Broker",
-    ) -> "Order | None":
+        broker: Broker,
+    ) -> Order | None:
         """Process a single asset for rebalancing.
 
         Returns:
@@ -286,7 +332,7 @@ class TargetWeightExecutor:
         asset: str,
         pos,
         data: dict[str, dict],
-        broker: "Broker",
+        broker: Broker,
     ) -> float | None:
         """Return a mark price for an existing position, tolerating sparse bars."""
         price = self._get_rebalance_price(asset, data)
@@ -300,7 +346,7 @@ class TargetWeightExecutor:
             price = pos.entry_price
         return price
 
-    def _get_current_weights(self, broker: "Broker", data: dict[str, dict]) -> dict[str, float]:
+    def _get_current_weights(self, broker: Broker, data: dict[str, dict]) -> dict[str, float]:
         """Get current portfolio weights from held positions only.
 
         Args:
@@ -325,7 +371,7 @@ class TargetWeightExecutor:
 
         return weights
 
-    def _get_effective_weights(self, broker: "Broker", data: dict[str, dict]) -> dict[str, float]:
+    def _get_effective_weights(self, broker: Broker, data: dict[str, dict]) -> dict[str, float]:
         """Get effective weights including pending orders.
 
         This prevents double-allocation when execute() is called multiple times
@@ -367,7 +413,7 @@ class TargetWeightExecutor:
         self,
         target_weights: dict[str, float],
         data: dict[str, dict],
-        broker: "Broker",
+        broker: Broker,
     ) -> list[dict]:
         """Preview trades without executing.
 

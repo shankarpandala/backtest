@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 
-from ml4t.backtest import BacktestConfig, DataFeed, Engine
+from ml4t.backtest import BacktestConfig, DataFeed, Engine, FeedSpec
+from ml4t.backtest.execution.schedule import RebalanceSchedule
 from ml4t.backtest.strategies import (
     LongShortStrategy,
     MeanReversionStrategy,
@@ -293,6 +294,112 @@ class TestLongShortStrategy:
         # Bottom 2 should be short (excluding any in long)
         assert "E" in short_assets
         assert "D" in short_assets
+
+    def test_schedule_overrides_bar_frequency(self):
+        """Explicit schedules should override fixed bar-count rebalancing."""
+
+        class ScheduledLongShort(LongShortStrategy):
+            signal_column = "signal"
+            long_count = 1
+            short_count = 1
+            position_size = 0.1
+            rebalance_frequency = 999
+            rebalance_schedule = RebalanceSchedule.explicit_timestamps(
+                [datetime(2023, 1, 2), datetime(2023, 1, 5)]
+            )
+
+        rows = []
+        for i in range(6):
+            timestamp = datetime(2023, 1, 1) + timedelta(days=i)
+            if timestamp == datetime(2023, 1, 2):
+                signals = {"A": 2.0, "B": -2.0, "C": 0.0}
+            elif timestamp == datetime(2023, 1, 5):
+                signals = {"A": -1.0, "B": 0.0, "C": 2.0}
+            else:
+                signals = {"A": 1.0, "B": -1.0, "C": 0.0}
+            rows.extend(
+                [
+                    {"timestamp": timestamp, "asset": "A", "close": 100.0, "signal": signals["A"]},
+                    {"timestamp": timestamp, "asset": "B", "close": 100.0, "signal": signals["B"]},
+                    {"timestamp": timestamp, "asset": "C", "close": 100.0, "signal": signals["C"]},
+                ]
+            )
+
+        df = pl.DataFrame(rows)
+        feed = DataFeed(
+            prices_df=df,
+            signals_df=df.select(["timestamp", "asset", "signal"]),
+        )
+
+        engine = Engine.from_config(
+            feed,
+            ScheduledLongShort(),
+            BacktestConfig.from_preset("fast"),
+        )
+        result = engine.run()
+
+        entry_days = sorted({trade.entry_time.date() for trade in result.trades})
+        assert entry_days == [datetime(2023, 1, 2).date(), datetime(2023, 1, 5).date()]
+
+    def test_weekly_schedule_uses_feed_session_labels(self):
+        """Weekly schedules on daily labeled bars should rebalance on labeled Fridays."""
+
+        class WeeklyLongShort(LongShortStrategy):
+            signal_column = "signal"
+            long_count = 1
+            short_count = 1
+            position_size = 0.1
+            rebalance_frequency = 999
+            rebalance_schedule = RebalanceSchedule.weekly()
+
+        rows = []
+        dates = [
+            datetime(2024, 1, 1),
+            datetime(2024, 1, 2),
+            datetime(2024, 1, 3),
+            datetime(2024, 1, 4),
+            datetime(2024, 1, 5),
+            datetime(2024, 1, 8),
+            datetime(2024, 1, 9),
+            datetime(2024, 1, 10),
+            datetime(2024, 1, 11),
+            datetime(2024, 1, 12),
+        ]
+        for timestamp in dates:
+            if timestamp == datetime(2024, 1, 5):
+                signals = {"A": 2.0, "B": -2.0, "C": 0.0}
+            elif timestamp == datetime(2024, 1, 12):
+                signals = {"A": -1.0, "B": 0.0, "C": 2.0}
+            else:
+                signals = {"A": 1.0, "B": -1.0, "C": 0.0}
+            rows.extend(
+                [
+                    {"timestamp": timestamp, "asset": "A", "close": 100.0, "signal": signals["A"]},
+                    {"timestamp": timestamp, "asset": "B", "close": 100.0, "signal": signals["B"]},
+                    {"timestamp": timestamp, "asset": "C", "close": 100.0, "signal": signals["C"]},
+                ]
+            )
+
+        df = pl.DataFrame(rows)
+        feed = DataFeed(
+            prices_df=df,
+            signals_df=df.select(["timestamp", "asset", "signal"]),
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                data_frequency="daily",
+                timestamp_semantics="session_label",
+            ),
+        )
+
+        engine = Engine.from_config(
+            feed,
+            WeeklyLongShort(),
+            BacktestConfig.from_preset("fast"),
+        )
+        result = engine.run()
+
+        entry_days = sorted({trade.entry_time.date() for trade in result.trades})
+        assert entry_days == [datetime(2024, 1, 5).date(), datetime(2024, 1, 12).date()]
 
 
 class TestStrategyImports:
