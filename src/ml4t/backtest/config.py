@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
