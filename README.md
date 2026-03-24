@@ -169,6 +169,28 @@ Quote-aware runs also preserve the microstructure context in the result surface:
 - `result.to_trades_dataframe()` includes nullable entry/exit quote summaries
 - `result.to_portfolio_state_dataframe()` reflects the configured mark source over time
 
+## Reproducible Config Snapshots
+
+`BacktestConfig` is also the serializable backtest preset surface. You can keep
+input configs sparse, then persist the fully resolved config that actually ran.
+
+```python
+config = BacktestConfig.from_yaml("config/my_backtest.yaml")
+result = Engine(feed, strategy, config).run()
+
+resolved_config = result.config.to_dict()
+runtime_spec = result.to_spec_dict()
+written = result.to_parquet("results/run_001")
+```
+
+The exported result directory includes:
+
+- `config.yaml` for the replayable resolved config payload
+- `spec.yaml` for the richer runtime snapshot with library version and realized run window
+
+Use top-level `feed` in `BacktestConfig` for generic feed semantics and top-level
+`metadata` for user-defined provenance like input paths or strategy ids.
+
 ## Commission and Slippage
 
 ```python
