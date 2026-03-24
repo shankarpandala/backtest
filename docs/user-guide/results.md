@@ -12,7 +12,10 @@ For reproducibility, `BacktestResult` also exposes:
 
 - `result.config.to_dict()` for the fully resolved replayable config payload
 - `result.to_spec_dict()` for a richer runtime snapshot including library version and realized window
-- `result.to_parquet(...)`, which writes `config.yaml` and `spec.yaml` when config is available
+- `result.to_predictions_dataframe()` for the raw prediction/input surface passed into the
+  backtest, when available
+- `result.to_parquet(...)`, which writes `config.yaml`, `spec.yaml`, and `predictions.parquet`
+  when available
 
 ## Metrics
 
@@ -293,6 +296,26 @@ This is the right primitive for downstream diagnostics such as:
 - time in market
 - occupancy and utilization metrics
 
+## Predictions DataFrame
+
+If you passed `signals_df` into `DataFeed` or `run_backtest(...)`, the raw input
+is available on the result:
+
+```python
+predictions_df = result.to_predictions_dataframe()
+print(predictions_df.head())
+```
+
+This returns the original Polars DataFrame without reinterpretation. It is meant
+for downstream diagnostics and attribution, for example:
+
+- joining predictions to fills or trades
+- evaluating score distributions for winning vs losing trades
+- comparing model inputs to realized execution and PnL
+
+The important convention is that this surface is treated as the raw model/input
+surface, not as a guaranteed post-mapping trading signal surface.
+
 ## Fills
 
 Access every individual order fill:
@@ -357,6 +380,7 @@ result.to_parquet("./results/my_backtest")
 # Creates:
 #   trades.parquet
 #   fills.parquet
+#   predictions.parquet  # if raw prediction inputs were supplied
 #   equity.parquet
 #   portfolio_state.parquet
 #   daily_pnl.parquet

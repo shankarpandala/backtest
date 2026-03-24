@@ -117,6 +117,7 @@ Auto-generated from source docstrings.
     options:
       show_root_heading: true
       members:
+        - to_predictions_dataframe
         - to_trades_dataframe
         - to_equity_dataframe
         - to_dict

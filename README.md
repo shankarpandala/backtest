@@ -168,6 +168,8 @@ Quote-aware runs also preserve the microstructure context in the result surface:
 - `result.to_fills_dataframe()` includes bid/ask/midpoint/spread/size context
 - `result.to_trades_dataframe()` includes nullable entry/exit quote summaries
 - `result.to_portfolio_state_dataframe()` reflects the configured mark source over time
+- `result.to_predictions_dataframe()` preserves the raw model/input surface for downstream
+  diagnostics
 
 ## Reproducible Config Snapshots
 

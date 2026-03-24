@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import (
     Broker,
@@ -23,7 +24,6 @@ from ml4t.backtest.config import (
     SlippageType,
 )
 from ml4t.backtest.models import PercentageCommission, VolumeShareSlippage
-from ml4t.data.artifacts.market_data import FeedSpec
 
 # === Test Data Generators ===
 
@@ -845,6 +845,17 @@ class TestRunBacktestWithConfig:
 
         assert results.equity_curve is not None
         assert len(results.equity_curve) == 10
+
+    def test_run_backtest_preserves_raw_predictions_dataframe(self):
+        """Test raw input predictions are available on the result surface."""
+        prices = generate_prices(["AAPL"], datetime(2024, 1, 1), 10)
+        signals = generate_signals(["AAPL"], datetime(2024, 1, 1), 10, ["ml_score"])
+        strategy = BuyAndHoldStrategy("AAPL")
+
+        result = run_backtest(prices=prices, signals=signals, strategy=strategy, config="default")
+
+        assert result.predictions is not None
+        assert result.to_predictions_dataframe().equals(signals)
 
     def test_run_backtest_uses_feed_spec_for_runtime_config(self):
         """Feed metadata should populate runtime config when explicit config is unset."""

@@ -8,7 +8,7 @@ Example:
     >>> engine = Engine(feed, strategy)
     >>> result = engine.run()
     >>>
-    >>> # Export trades to Parquet
+    >>> # Export trades and raw predictions to Parquet
     >>> result.to_parquet("./results/my_backtest")
     >>>
     >>> # Get DataFrames
@@ -56,6 +56,7 @@ class BacktestResult:
         trades: List of completed Trade objects
         equity_curve: List of (timestamp, portfolio_value) tuples
         fills: List of Fill objects (all order fills)
+        predictions: Raw prediction DataFrame passed into the backtest (optional)
         metrics: Dictionary of computed performance metrics
         config: BacktestConfig used for the backtest (optional)
         equity: EquityCurve analytics object
@@ -66,6 +67,7 @@ class BacktestResult:
     equity_curve: list[tuple[datetime, float]]
     fills: list[Fill]
     metrics: dict[str, Any]
+    predictions: pl.DataFrame | None = None
     config: BacktestConfig | None = None
     equity: EquityCurve | None = None
     trade_analyzer: TradeAnalyzer | None = None
@@ -201,6 +203,12 @@ class BacktestResult:
 
         self._fills_df = pl.DataFrame(records, schema=self._fills_schema())
         return self._fills_df
+
+    def to_predictions_dataframe(self) -> pl.DataFrame:
+        """Return the raw prediction DataFrame used as backtest input."""
+        if self.predictions is None:
+            return pl.DataFrame()
+        return self.predictions
 
     def to_equity_dataframe(self) -> pl.DataFrame:
         """Convert equity curve to Polars DataFrame.
@@ -451,6 +459,8 @@ class BacktestResult:
                 "portfolio_state": self.portfolio_state,
             }
         )
+        if self.predictions is not None:
+            result["predictions"] = self.predictions
         if self.equity is not None:
             result["equity"] = self.equity
         if self.trade_analyzer is not None:
@@ -503,6 +513,7 @@ class BacktestResult:
             {path}/
                 trades.parquet
                 fills.parquet
+                predictions.parquet
                 equity.parquet
                 portfolio_state.parquet
                 daily_pnl.parquet
@@ -513,7 +524,7 @@ class BacktestResult:
         Args:
             path: Directory path to write files
             include: Components to include. Default: all.
-                Options: ["trades", "fills", "equity", "portfolio_state", "daily_pnl",
+                Options: ["trades", "fills", "predictions", "equity", "portfolio_state", "daily_pnl",
                     "metrics", "config"]
             compression: Parquet compression codec (default: "zstd")
 
@@ -527,6 +538,7 @@ class BacktestResult:
             include = [
                 "trades",
                 "fills",
+                "predictions",
                 "equity",
                 "portfolio_state",
                 "daily_pnl",
@@ -546,6 +558,11 @@ class BacktestResult:
             fills_path = path / "fills.parquet"
             self.to_fills_dataframe().write_parquet(fills_path, compression=compression)
             written["fills"] = fills_path
+
+        if "predictions" in include and self.predictions is not None:
+            predictions_path = path / "predictions.parquet"
+            self.to_predictions_dataframe().write_parquet(predictions_path, compression=compression)
+            written["predictions"] = predictions_path
 
         if "equity" in include:
             equity_path = path / "equity.parquet"
@@ -708,6 +725,15 @@ class BacktestResult:
                     )
                 )
 
+        predictions = None
+        predictions_path = path / "predictions.parquet"
+        if predictions_path.exists():
+            predictions = pl.read_parquet(predictions_path)
+        else:
+            signals_path = path / "signals.parquet"
+            if signals_path.exists():
+                predictions = pl.read_parquet(signals_path)
+
         portfolio_state: list[tuple[datetime, float, float, float, float, int]] = []
         portfolio_state_path = path / "portfolio_state.parquet"
         if portfolio_state_path.exists():
@@ -757,6 +783,7 @@ class BacktestResult:
             trades=trades,
             equity_curve=equity_curve,
             fills=fills,
+            predictions=predictions,
             portfolio_state=portfolio_state,
             metrics=metrics,
             config=config,

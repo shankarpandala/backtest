@@ -105,6 +105,25 @@ def sample_fills() -> list[Fill]:
 
 
 @pytest.fixture
+def sample_predictions() -> pl.DataFrame:
+    """Create sample raw predictions used by a backtest."""
+    base_time = datetime(2024, 1, 1, 10, 0)
+    return pl.DataFrame(
+        {
+            "timestamp": [
+                base_time,
+                base_time,
+                base_time + timedelta(hours=1),
+                base_time + timedelta(hours=1),
+            ],
+            "asset": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "prediction": [0.8, -0.2, 0.6, 0.1],
+            "confidence": [0.9, 0.4, 0.85, 0.55],
+        }
+    )
+
+
+@pytest.fixture
 def sample_portfolio_state() -> list[tuple[datetime, float, float, float, float, int]]:
     """Create sample portfolio state snapshots for testing."""
     base_time = datetime(2024, 1, 1, 10, 0)
@@ -123,6 +142,7 @@ def backtest_result(
     sample_trades: list[Trade],
     sample_equity_curve: list[tuple[datetime, float]],
     sample_fills: list[Fill],
+    sample_predictions: pl.DataFrame,
     sample_portfolio_state: list[tuple[datetime, float, float, float, float, int]],
 ) -> BacktestResult:
     """Create BacktestResult for testing."""
@@ -130,6 +150,7 @@ def backtest_result(
         trades=sample_trades,
         equity_curve=sample_equity_curve,
         fills=sample_fills,
+        predictions=sample_predictions,
         portfolio_state=sample_portfolio_state,
         metrics={
             "final_value": 100750.0,
@@ -327,6 +348,25 @@ class TestBacktestResultFillsDataFrame:
         assert "order_id" in df.columns
 
 
+class TestBacktestResultPredictionsDataFrame:
+    """Tests for to_predictions_dataframe()."""
+
+    def test_predictions_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_predictions_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 4
+        assert df.columns == ["timestamp", "asset", "prediction", "confidence"]
+        assert df["prediction"].to_list() == [0.8, -0.2, 0.6, 0.1]
+
+    def test_predictions_dataframe_empty_when_absent(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_predictions_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df.columns) == 0
+
+
 class TestBacktestResultPortfolioStateDataFrame:
     """Tests for to_portfolio_state_dataframe()."""
 
@@ -487,6 +527,7 @@ class TestBacktestResultDict:
         assert "trades" in d
         assert "equity_curve" in d
         assert "fills" in d
+        assert "predictions" in d
         assert "portfolio_state" in d
         assert "sharpe" in d
 
@@ -572,6 +613,7 @@ class TestBacktestResultParquet:
 
             assert "trades" in written
             assert "fills" in written
+            assert "predictions" in written
             assert "equity" in written
             assert "portfolio_state" in written
             assert "daily_pnl" in written
@@ -581,6 +623,7 @@ class TestBacktestResultParquet:
 
             assert written["trades"].exists()
             assert written["fills"].exists()
+            assert written["predictions"].exists()
             assert written["equity"].exists()
             assert written["portfolio_state"].exists()
             assert written["metrics"].exists()
@@ -596,6 +639,7 @@ class TestBacktestResultParquet:
             assert "trades" in written
             assert "metrics" in written
             assert "fills" not in written
+            assert "predictions" not in written
             assert "equity" not in written
             assert "portfolio_state" not in written
 
@@ -648,6 +692,25 @@ class TestBacktestResultParquet:
             assert spec["config"]["metadata"]["strategy_id"] == "demo"
             assert spec["window"]["start"] == "2024-01-01T10:00:00"
 
+    def test_to_parquet_writes_predictions_snapshot(self, sample_predictions: pl.DataFrame):
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[],
+            fills=[],
+            predictions=sample_predictions,
+            metrics={},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            written = result.to_parquet(path, include=["predictions"])
+
+            assert "predictions" in written
+            assert written["predictions"].exists()
+
+            loaded = pl.read_parquet(written["predictions"])
+            assert loaded.equals(sample_predictions)
+
     def test_from_parquet_roundtrip(self, backtest_result: BacktestResult):
         """Test Parquet save and load roundtrip."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -658,6 +721,8 @@ class TestBacktestResultParquet:
 
             assert len(loaded.trades) == len(backtest_result.trades)
             assert len(loaded.fills) == len(backtest_result.fills)
+            assert loaded.predictions is not None
+            assert loaded.predictions.equals(backtest_result.predictions)
             assert len(loaded.equity_curve) == len(backtest_result.equity_curve)
             assert len(loaded.portfolio_state) == len(backtest_result.portfolio_state)
             assert loaded.fills[0].rebalance_id == "rebalance-1"

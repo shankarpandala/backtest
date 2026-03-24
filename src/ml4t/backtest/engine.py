@@ -340,6 +340,7 @@ class Engine:
                 trades=[],
                 equity_curve=[],
                 fills=[],
+                predictions=self.feed.signals,
                 portfolio_state=[],
                 metrics={"skipped_bars": self._skipped_bars},
                 config=self.config,
@@ -458,6 +459,7 @@ class Engine:
             trades=all_trades,  # Includes both closed and open trades
             equity_curve=self.equity_curve,
             fills=self.broker.fills,
+            predictions=self.feed.signals,
             portfolio_state=self.portfolio_state,
             metrics=metrics,
             config=self.config,
