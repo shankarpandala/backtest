@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
+
 from ..calendar import get_schedule
 from ..config import DataFrequency
-from ..feed_spec import FeedSpec, TimestampSemantics
 from ..sessions import SessionConfig
 
 _ANNUALIZATION_FACTORS: dict[str, int] = {

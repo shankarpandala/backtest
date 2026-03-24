@@ -8,8 +8,7 @@ from datetime import datetime
 from typing import Any
 
 import polars as pl
-
-from .feed_spec import FeedSpec
+from ml4t.data.artifacts.market_data import FeedSpec
 
 
 class _AssetsData(dict[str, dict[str, Any]]):

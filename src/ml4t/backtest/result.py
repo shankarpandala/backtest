@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from .analytics.annualization import get_annualization_factor, should_session_align
-from .feed_spec import FeedSpec
 from .types import Fill, Trade
 
 if TYPE_CHECKING:

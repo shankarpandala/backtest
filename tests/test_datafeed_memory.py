@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
-from ml4t.backtest import DataFeed, FeedSpec
+from ml4t.backtest import BacktestConfig, DataFeed
 from ml4t.backtest.config import DataFrequency
 
 
@@ -485,5 +486,9 @@ class TestDataFeedContracts:
             )
 
     def test_weekly_and_monthly_feed_frequencies_remain_irregular(self):
-        assert FeedSpec(data_frequency="weekly").to_backtest_frequency() == DataFrequency.IRREGULAR
-        assert FeedSpec(data_frequency="monthly").to_backtest_frequency() == DataFrequency.IRREGULAR
+        assert BacktestConfig(feed_spec=FeedSpec(data_frequency="weekly")).resolved_data_frequency == (
+            DataFrequency.IRREGULAR
+        )
+        assert BacktestConfig(feed_spec=FeedSpec(data_frequency="monthly")).resolved_data_frequency == (
+            DataFrequency.IRREGULAR
+        )

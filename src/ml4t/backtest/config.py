@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
-from .feed_spec import FeedSpec, TimestampSemantics
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
 
 
@@ -228,6 +228,42 @@ class InitialHwmSource(str, Enum):
     FILL_PRICE = "fill_price"  # Use fill price (default, most frameworks)
     BAR_CLOSE = "bar_close"  # Use bar's close
     BAR_HIGH = "bar_high"  # Use bar's high (VBT Pro with OHLC)
+
+
+def _to_backtest_frequency(value: DataFrequency | Any | None) -> DataFrequency | None:
+    if value is None:
+        return None
+    if isinstance(value, DataFrequency):
+        return value
+    if isinstance(value, Enum):
+        value = value.value
+
+    normalized = str(value).strip().lower()
+    mapping = {
+        "daily": DataFrequency.DAILY,
+        "1d": DataFrequency.DAILY,
+        "d": DataFrequency.DAILY,
+        "weekly": DataFrequency.IRREGULAR,
+        "monthly": DataFrequency.IRREGULAR,
+        "minute": DataFrequency.MINUTE_1,
+        "1m": DataFrequency.MINUTE_1,
+        "1min": DataFrequency.MINUTE_1,
+        "5m": DataFrequency.MINUTE_5,
+        "5min": DataFrequency.MINUTE_5,
+        "5minute": DataFrequency.MINUTE_5,
+        "15m": DataFrequency.MINUTE_15,
+        "15min": DataFrequency.MINUTE_15,
+        "15minute": DataFrequency.MINUTE_15,
+        "30m": DataFrequency.MINUTE_30,
+        "30min": DataFrequency.MINUTE_30,
+        "30minute": DataFrequency.MINUTE_30,
+        "hour": DataFrequency.HOURLY,
+        "hourly": DataFrequency.HOURLY,
+        "1h": DataFrequency.HOURLY,
+        "tick": DataFrequency.IRREGULAR,
+        "second": DataFrequency.IRREGULAR,
+    }
+    return mapping.get(normalized, DataFrequency.IRREGULAR)
 
 
 class TrailStopTiming(str, Enum):
@@ -526,7 +562,7 @@ class BacktestConfig:
         if not self._explicit_timezone and self.feed_spec.timezone:
             self.timezone = self.feed_spec.timezone
 
-        spec_frequency = self.feed_spec.to_backtest_frequency()
+        spec_frequency = _to_backtest_frequency(self.feed_spec.data_frequency)
         if not self._explicit_data_frequency and spec_frequency is not None:
             self.data_frequency = spec_frequency
 
@@ -551,7 +587,7 @@ class BacktestConfig:
 
     @property
     def resolved_data_frequency(self) -> DataFrequency:
-        resolved_frequency = self.resolved_feed_spec.to_backtest_frequency()
+        resolved_frequency = _to_backtest_frequency(self.resolved_feed_spec.data_frequency)
         return resolved_frequency or self.data_frequency
 
     @property
@@ -579,7 +615,7 @@ class BacktestConfig:
         ):
             updates["timezone"] = effective_feed_spec.timezone
 
-        spec_frequency = effective_feed_spec.to_backtest_frequency()
+        spec_frequency = _to_backtest_frequency(effective_feed_spec.data_frequency)
         if (
             not self._explicit_data_frequency
             and spec_frequency is not None

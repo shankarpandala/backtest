@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .artifact_spec import MarketDataSpec
-from .feed_spec import FeedSpec
+from ml4t.data.artifacts.market_data import FeedSpec, MarketDataSpec
 
 
 def market_data_spec_to_feed_spec(spec: MarketDataSpec | Mapping[str, Any]) -> FeedSpec:

@@ -9,9 +9,10 @@ from enum import Enum
 from typing import Any
 
 import polars as pl
+from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from ..calendar import get_schedule
-from ..feed_spec import FeedSpec, TimestampSemantics
+from ..config import DataFrequency
 from ..sessions import SessionConfig, assign_session_date
 
 
@@ -210,12 +211,8 @@ def _infer_timestamp_semantics(
     data_frequency: Any | None,
 ) -> TimestampSemantics:
     if data_frequency is not None:
-        frequency = FeedSpec(data_frequency=data_frequency).to_backtest_frequency()
-        if (
-            frequency is not None
-            and frequency.value == "daily"
-            and _timestamps_look_date_labeled(timestamps)
-        ):
+        frequency = _to_backtest_frequency(data_frequency)
+        if frequency == DataFrequency.DAILY and _timestamps_look_date_labeled(timestamps):
             return TimestampSemantics.SESSION_LABEL
 
     if _timestamps_look_date_labeled(timestamps):
@@ -229,6 +226,42 @@ def _timestamps_look_date_labeled(timestamps: Sequence[datetime]) -> bool:
         ts.hour == 0 and ts.minute == 0 and ts.second == 0 and ts.microsecond == 0
         for ts in timestamps
     )
+
+
+def _to_backtest_frequency(value: DataFrequency | Any | None) -> DataFrequency | None:
+    if value is None:
+        return None
+    if isinstance(value, DataFrequency):
+        return value
+    if isinstance(value, Enum):
+        value = value.value
+
+    normalized = str(value).strip().lower()
+    mapping = {
+        "daily": DataFrequency.DAILY,
+        "1d": DataFrequency.DAILY,
+        "d": DataFrequency.DAILY,
+        "weekly": DataFrequency.IRREGULAR,
+        "monthly": DataFrequency.IRREGULAR,
+        "minute": DataFrequency.MINUTE_1,
+        "1m": DataFrequency.MINUTE_1,
+        "1min": DataFrequency.MINUTE_1,
+        "5m": DataFrequency.MINUTE_5,
+        "5min": DataFrequency.MINUTE_5,
+        "5minute": DataFrequency.MINUTE_5,
+        "15m": DataFrequency.MINUTE_15,
+        "15min": DataFrequency.MINUTE_15,
+        "15minute": DataFrequency.MINUTE_15,
+        "30m": DataFrequency.MINUTE_30,
+        "30min": DataFrequency.MINUTE_30,
+        "30minute": DataFrequency.MINUTE_30,
+        "hour": DataFrequency.HOURLY,
+        "hourly": DataFrequency.HOURLY,
+        "1h": DataFrequency.HOURLY,
+        "tick": DataFrequency.IRREGULAR,
+        "second": DataFrequency.IRREGULAR,
+    }
+    return mapping.get(normalized, DataFrequency.IRREGULAR)
 
 
 def _build_session_config(

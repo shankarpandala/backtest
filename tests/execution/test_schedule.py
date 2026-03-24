@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import polars as pl
+from ml4t.data.artifacts.market_data import FeedSpec
 
-from ml4t.backtest import FeedSpec
 from ml4t.backtest.execution import (
     RebalanceCadence,
     RebalanceSchedule,

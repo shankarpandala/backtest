@@ -13,7 +13,6 @@ try:
 except ImportError:
     __version__ = "0.0.0.dev0"
 
-from .artifact_spec import FeatureSpec, LabelSpec, MarketDataSpec, PredictionSpec
 from .broker import Broker
 from .config import BacktestConfig, CommissionType
 from .datafeed import DataFeed
@@ -22,7 +21,6 @@ from .engine import Engine, run_backtest
 # Execution: rebalancing
 from .execution.rebalancer import RebalanceConfig, TargetWeightExecutor
 from .execution.schedule import RebalanceCadence, RebalanceSchedule, resolve_rebalance_timestamps
-from .feed_spec import FeedSpec
 from .result import BacktestResult
 
 # Risk management rules (position-level)
@@ -56,11 +54,6 @@ __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "CommissionType",
-    "FeedSpec",
-    "MarketDataSpec",
-    "LabelSpec",
-    "FeatureSpec",
-    "PredictionSpec",
     # Canonical domain types
     "OrderType",
     "OrderSide",

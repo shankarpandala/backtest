@@ -3,10 +3,10 @@
 from datetime import datetime
 
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import (
     Broker,
-    FeedSpec,
     OrderSide,
 )
 from ml4t.backtest.config import RebalanceMode

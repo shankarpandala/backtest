@@ -4,8 +4,9 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import polars as pl
+from ml4t.data.artifacts.market_data import FeedSpec
 
-from ml4t.backtest import BacktestConfig, DataFeed, Engine, FeedSpec
+from ml4t.backtest import BacktestConfig, DataFeed, Engine
 from ml4t.backtest.execution.schedule import RebalanceSchedule
 from ml4t.backtest.strategies import (
     LongShortStrategy,

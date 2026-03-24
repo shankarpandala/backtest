@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
-from ml4t.backtest import FeedSpec
 from ml4t.backtest.result import (
     BacktestResult,
     _get_annualization_factor,

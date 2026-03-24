@@ -4,13 +4,13 @@ from datetime import datetime, timedelta
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import (
     Broker,
     DataFeed,
     Engine,
     ExecutionMode,
-    FeedSpec,
     OrderSide,
     OrderType,
     Strategy,
