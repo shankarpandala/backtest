@@ -22,13 +22,13 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import yaml
-
+from ml4t.data.artifacts.base import serialize_artifact_value
 from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
@@ -234,6 +234,11 @@ class InitialHwmSource(str, Enum):
     FILL_PRICE = "fill_price"  # Use fill price (default, most frameworks)
     BAR_CLOSE = "bar_close"  # Use bar's close
     BAR_HIGH = "bar_high"  # Use bar's high (VBT Pro with OHLC)
+
+
+def _feed_spec_to_dict(feed_spec: FeedSpec) -> dict[str, Any]:
+    """Serialize feed metadata to plain Python data for config round-trips."""
+    return serialize_artifact_value(asdict(feed_spec))
 
 
 def _to_backtest_frequency(value: DataFrequency | Any | None) -> DataFrequency | None:
@@ -543,6 +548,7 @@ class BacktestConfig:
     # === Metadata ===
     preset_name: str | None = None  # Name of preset this was loaded from
     feed_spec: FeedSpec | None = field(default=None, repr=False, compare=False)
+    metadata: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
     _explicit_timezone: bool = field(default=False, init=False, repr=False, compare=False)
     _explicit_data_frequency: bool = field(default=False, init=False, repr=False, compare=False)
 
@@ -708,6 +714,8 @@ class BacktestConfig:
                 "data_frequency": self.data_frequency.value,
                 "enforce_sessions": self.enforce_sessions,
             },
+            "feed": _feed_spec_to_dict(self.resolved_feed_spec),
+            "metadata": serialize_artifact_value(self.metadata),
         }
 
     @classmethod
@@ -736,6 +744,8 @@ class BacktestConfig:
                 "settlement",
                 "orders",
                 "calendar",
+                "feed",
+                "metadata",
             }
             unknown_sections = set(data) - allowed_sections
             if unknown_sections:
@@ -786,8 +796,35 @@ class BacktestConfig:
                     "data_frequency",
                     "enforce_sessions",
                 },
+                "feed": {
+                    "timestamp_col",
+                    "entity_col",
+                    "price_col",
+                    "open_col",
+                    "high_col",
+                    "low_col",
+                    "close_col",
+                    "volume_col",
+                    "bid_col",
+                    "ask_col",
+                    "mid_col",
+                    "bid_size_col",
+                    "ask_size_col",
+                    "calendar",
+                    "timezone",
+                    "data_frequency",
+                    "bar_type",
+                    "timestamp_semantics",
+                    "session_start_time",
+                },
             }
             for section, cfg in data.items():
+                if section == "metadata":
+                    if not isinstance(cfg, dict):
+                        raise TypeError(
+                            f"Section 'metadata' must be a dict, got {type(cfg).__name__}"
+                        )
+                    continue
                 if not isinstance(cfg, dict):
                     raise TypeError(f"Section '{section}' must be a dict, got {type(cfg).__name__}")
                 unknown_keys = set(cfg) - allowed_keys_by_section[section]
@@ -806,6 +843,13 @@ class BacktestConfig:
         settle_cfg = data.get("settlement", {})
         order_cfg = data.get("orders", {})
         cal_cfg = data.get("calendar", {})
+        feed_cfg = data.get("feed", {})
+        metadata = data.get("metadata", {})
+
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise TypeError(f"Section 'metadata' must be a dict, got {type(metadata).__name__}")
 
         allow_short_selling = acct_cfg.get("allow_short_selling", False)
         allow_leverage = acct_cfg.get("allow_leverage", False)
@@ -872,6 +916,8 @@ class BacktestConfig:
             enforce_sessions=cal_cfg.get("enforce_sessions", False),
             # Metadata
             preset_name=preset_name,
+            feed_spec=FeedSpec.from_any(feed_cfg) if feed_cfg else None,
+            metadata=dict(metadata),
         )
 
     def to_yaml(self, path: str | Path) -> None:

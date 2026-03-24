@@ -8,6 +8,12 @@ This applies to both classic OHLCV backtests and quote-aware backtests. When you
 with bid/ask-aware execution or marking, the result surface preserves the quote
 context used to produce fills and trade summaries.
 
+For reproducibility, `BacktestResult` also exposes:
+
+- `result.config.to_dict()` for the fully resolved replayable config payload
+- `result.to_spec_dict()` for a richer runtime snapshot including library version and realized window
+- `result.to_parquet(...)`, which writes `config.yaml` and `spec.yaml` when config is available
+
 ## Metrics
 
 ```python

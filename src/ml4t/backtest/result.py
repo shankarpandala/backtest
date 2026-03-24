@@ -28,9 +28,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
-
 from ml4t.data.artifacts.market_data import FeedSpec
 
+try:
+    from ._version import __version__
+except ImportError:  # pragma: no cover - fallback for local editable edge cases
+    __version__ = "0.0.0.dev0"
 from .analytics.annualization import should_session_align
 from .types import Fill, OrderSide, Trade
 
@@ -454,6 +457,27 @@ class BacktestResult:
             result["trade_analyzer"] = self.trade_analyzer
         return result
 
+    def to_spec_dict(self) -> dict[str, Any]:
+        """Export a resolved runtime spec for reproducibility.
+
+        Returns:
+            Dictionary containing the fully resolved config, library version,
+            and realized run window. The nested ``config`` payload remains
+            compatible with ``BacktestConfig.from_dict()``.
+        """
+        config_dict = self.config.to_dict() if self.config is not None else {}
+        start = self.equity_curve[0][0].isoformat() if self.equity_curve else None
+        end = self.equity_curve[-1][0].isoformat() if self.equity_curve else None
+        return {
+            "version": 1,
+            "library_version": __version__,
+            "config": config_dict,
+            "window": {
+                "start": start,
+                "end": end,
+            },
+        }
+
     # Dict-like access keeps validation scripts and older notebook code working.
     def __getitem__(self, key: str) -> Any:
         return self.to_dict()[key]
@@ -484,6 +508,7 @@ class BacktestResult:
                 daily_pnl.parquet
                 metrics.json
                 config.yaml (if config available)
+                spec.yaml (if config available)
 
         Args:
             path: Directory path to write files
@@ -507,6 +532,7 @@ class BacktestResult:
                 "daily_pnl",
                 "metrics",
                 "config",
+                "spec",
             ]
 
         written: dict[str, Path] = {}
@@ -570,6 +596,17 @@ class BacktestResult:
                 written["config"] = config_path
             except (ImportError, AttributeError):
                 pass  # Skip if yaml not available or config has no to_dict
+
+        if "spec" in include and self.config is not None:
+            spec_path = path / "spec.yaml"
+            try:
+                import yaml
+
+                with open(spec_path, "w") as f:
+                    yaml.dump(self.to_spec_dict(), f, default_flow_style=False, sort_keys=False)
+                written["spec"] = spec_path
+            except (ImportError, AttributeError):
+                pass
 
         return written
 
@@ -701,6 +738,20 @@ class BacktestResult:
                 config = BacktestConfig.from_dict(config_data)
             except (ImportError, Exception):
                 pass  # Skip if yaml not available or config invalid
+        else:
+            spec_path = path / "spec.yaml"
+            if spec_path.exists():
+                try:
+                    import yaml
+
+                    from .config import BacktestConfig
+
+                    with open(spec_path) as f:
+                        spec_data = yaml.safe_load(f)
+                    if isinstance(spec_data, dict) and isinstance(spec_data.get("config"), dict):
+                        config = BacktestConfig.from_dict(spec_data["config"])
+                except (ImportError, Exception):
+                    pass
 
         return cls(
             trades=trades,

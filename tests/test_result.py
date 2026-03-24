@@ -10,13 +10,14 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
+from ml4t.backtest.config import BacktestConfig
 from ml4t.backtest.result import (
     BacktestResult,
     enrich_trades_with_signals,
 )
 from ml4t.backtest.types import Fill, OrderSide, Trade
-from ml4t.data.artifacts.market_data import FeedSpec
 
 
 @pytest.fixture
@@ -516,12 +517,55 @@ class TestBacktestResultDict:
         assert "equity" in d
         assert "trade_analyzer" in d
 
+    def test_to_spec_dict_returns_resolved_config_snapshot(self):
+        """Test resolved config snapshot contains defaults, feed, metadata, and runtime window."""
+        config = BacktestConfig(
+            initial_cash=250000.0,
+            commission_rate=0.0025,
+            feed_spec=FeedSpec(
+                timestamp_col="time",
+                entity_col="ticker",
+                price_col="mid_price",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+            metadata={
+                "strategy_id": "topk_monthly_v2",
+                "signals_path": "/tmp/preds.parquet",
+            },
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[
+                (datetime(2024, 1, 2, 9, 30), 100000.0),
+                (datetime(2024, 1, 31, 16, 0), 101500.0),
+            ],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        spec = result.to_spec_dict()
+
+        assert spec["version"] == 1
+        assert isinstance(spec["library_version"], str)
+        assert spec["config"]["cash"]["initial"] == 250000.0
+        assert spec["config"]["commission"]["rate"] == 0.0025
+        assert spec["config"]["feed"]["timestamp_col"] == "time"
+        assert spec["config"]["feed"]["entity_col"] == "ticker"
+        assert spec["config"]["feed"]["price_col"] == "mid_price"
+        assert spec["config"]["metadata"]["strategy_id"] == "topk_monthly_v2"
+        assert spec["window"]["start"] == "2024-01-02T09:30:00"
+        assert spec["window"]["end"] == "2024-01-31T16:00:00"
+
 
 class TestBacktestResultParquet:
     """Tests for Parquet serialization."""
 
     def test_to_parquet_basic(self, backtest_result: BacktestResult):
         """Test basic Parquet export."""
+        backtest_result.config = BacktestConfig(metadata={"strategy_id": "default_export"})
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "test_backtest"
             written = backtest_result.to_parquet(path)
@@ -532,12 +576,16 @@ class TestBacktestResultParquet:
             assert "portfolio_state" in written
             assert "daily_pnl" in written
             assert "metrics" in written
+            assert "config" in written
+            assert "spec" in written
 
             assert written["trades"].exists()
             assert written["fills"].exists()
             assert written["equity"].exists()
             assert written["portfolio_state"].exists()
             assert written["metrics"].exists()
+            assert written["config"].exists()
+            assert written["spec"].exists()
 
     def test_to_parquet_selective(self, backtest_result: BacktestResult):
         """Test selective Parquet export."""
@@ -569,6 +617,36 @@ class TestBacktestResultParquet:
             path = Path(tmpdir) / "test_backtest"
             written = result.to_parquet(path, include=["config"])
             assert "config" not in written
+
+    def test_to_parquet_writes_spec_snapshot(self):
+        """Test resolved runtime spec export."""
+        config = BacktestConfig(
+            initial_cash=75000.0,
+            metadata={"strategy_id": "demo"},
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[(datetime(2024, 1, 1, 10, 0), 75000.0)],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            written = result.to_parquet(path, include=["spec"])
+
+            assert "spec" in written
+            assert written["spec"].exists()
+
+            import yaml
+
+            with open(written["spec"]) as f:
+                spec = yaml.safe_load(f)
+
+            assert spec["config"]["cash"]["initial"] == 75000.0
+            assert spec["config"]["metadata"]["strategy_id"] == "demo"
+            assert spec["window"]["start"] == "2024-01-01T10:00:00"
 
     def test_from_parquet_roundtrip(self, backtest_result: BacktestResult):
         """Test Parquet save and load roundtrip."""
@@ -615,6 +693,30 @@ class TestBacktestResultParquet:
             )
             loaded = BacktestResult.from_parquet(path)
             assert loaded.config is None
+
+    def test_from_parquet_loads_config_from_spec_when_config_yaml_missing(self):
+        """Test spec.yaml fallback restores replayable config."""
+        config = BacktestConfig(
+            initial_cash=82000.0,
+            metadata={"strategy_id": "spec_fallback"},
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[(datetime(2024, 2, 1, 10, 0), 82000.0)],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            result.to_parquet(path, include=["spec"])
+
+            loaded = BacktestResult.from_parquet(path)
+
+            assert loaded.config is not None
+            assert loaded.config.initial_cash == 82000.0
+            assert loaded.config.metadata["strategy_id"] == "spec_fallback"
 
     def test_metrics_json_serialization(self, backtest_result: BacktestResult):
         """Test metrics JSON contains only serializable values."""

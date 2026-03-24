@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0b10 - 2026-03-24
+
+### Added
+
+- `BacktestConfig` support for serialized top-level `feed` and passthrough `metadata`
+  sections, enabling sparse input presets with generic provenance fields.
+- `BacktestResult.to_spec_dict()` for a resolved runtime snapshot containing the full
+  replayable config, library version, and realized run window.
+- `spec.yaml` export alongside `config.yaml` in `BacktestResult.to_parquet()`.
+
+### Changed
+
+- `BacktestConfig.to_dict()` now emits plain-data feed metadata that round-trips safely
+  through dict, YAML, and Parquet persistence workflows.
+- `BacktestResult.from_parquet()` now falls back to `spec.yaml` when `config.yaml` is absent.
+- User guides now document the config workflow for sparse input, resolved output, `feed`,
+  `metadata`, and reproducibility exports.
+
+### Validation
+
+- `uv run ruff check src/ml4t/backtest/config.py src/ml4t/backtest/result.py tests/test_broker.py tests/test_result.py`
+- `uv run pytest tests/test_broker.py tests/test_result.py -q`
+- `uv run ty check`
+- `uv run python -m mkdocs build --strict`
+
 ## 0.1.0b9 - 2026-03-24
 
 ### Added
