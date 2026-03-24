@@ -241,15 +241,17 @@ result = BacktestResult.from_parquet("./results/my_backtest")
 
 ### Portfolio Analysis (Recommended)
 
-The simplest way to bridge backtest results into ml4t-diagnostic is `to_portfolio_analysis()`:
+The simplest way to bridge backtest results into ml4t-diagnostic is
+`portfolio_analysis_from_result()`:
 
 ```python
 from ml4t.backtest import Engine
+from ml4t.diagnostic.integration import portfolio_analysis_from_result
 
 result = engine.run()
 
 # One-liner bridge to ml4t-diagnostic
-analysis = result.to_portfolio_analysis(calendar="NYSE")
+analysis = portfolio_analysis_from_result(result, calendar="NYSE")
 
 # Now use PortfolioAnalysis methods
 print(f"Sharpe: {analysis.sharpe_ratio():.2f}")
@@ -257,21 +259,24 @@ print(f"Max DD: {analysis.max_drawdown():.2%}")
 monthly = analysis.compute_monthly_returns()
 ```
 
-The method extracts daily returns via `to_daily_pnl()` and sets `periods_per_year` from the calendar (252 for NYSE, 365 for crypto, etc.). If no calendar is passed, it uses the config's calendar.
+The helper extracts daily returns via `to_daily_pnl()` and sets
+`periods_per_year` from the calendar (252 for NYSE, 365 for crypto, etc.).
+If no calendar is passed, it uses the config's calendar.
 
 ```python
 # Crypto backtest
-analysis = result.to_portfolio_analysis(calendar="crypto")
+analysis = portfolio_analysis_from_result(result, calendar="crypto")
 
 # With benchmark
-analysis = result.to_portfolio_analysis(
+analysis = portfolio_analysis_from_result(
+    result,
     calendar="NYSE",
     benchmark=spy_returns,  # numpy array or Polars Series
 )
 
 # Gross vs net comparison
-analysis_gross = results_gross.to_portfolio_analysis(calendar="crypto")
-analysis_net = results_net.to_portfolio_analysis(calendar="crypto")
+analysis_gross = portfolio_analysis_from_result(results_gross, calendar="crypto")
+analysis_net = portfolio_analysis_from_result(results_net, calendar="crypto")
 ```
 
 !!! note "Requires ml4t-diagnostic"
@@ -340,7 +345,7 @@ print(result.config.preset_name)
 
 The [Machine Learning for Trading](https://github.com/stefan-jansen/machine-learning-for-trading) book uses BacktestResult in every case study:
 
-- **Ch16 / NB05** (`performance_reporting`) — `to_portfolio_analysis()`, MFE/MAE analysis, gross vs net comparison, full 24-section tearsheet
+- **Ch16 / NB05** (`performance_reporting`) — `portfolio_analysis_from_result()`, MFE/MAE analysis, gross vs net comparison, full 24-section tearsheet
 - **Ch16 case studies** — all cases save trade artifacts via `to_parquet()` and pass trades/metrics/equity to tearsheet generation
 - **Ch16 / NB06** (`sharpe_ratio_inference`) — statistical inference on backtest results
 
