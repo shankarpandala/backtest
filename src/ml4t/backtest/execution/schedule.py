@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any
 
 import polars as pl
+
 from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from ..calendar import get_schedule

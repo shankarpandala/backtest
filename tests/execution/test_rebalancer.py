@@ -3,7 +3,6 @@
 from datetime import datetime
 
 import pytest
-from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import (
     Broker,
@@ -13,6 +12,7 @@ from ml4t.backtest.config import RebalanceMode
 from ml4t.backtest.execution.rebalancer import RebalanceConfig, TargetWeightExecutor
 from ml4t.backtest.execution.schedule import RebalanceSchedule
 from ml4t.backtest.models import NoCommission, NoSlippage
+from ml4t.data.artifacts.market_data import FeedSpec
 
 
 class TestRebalanceConfig:
@@ -428,7 +428,9 @@ class TestTargetWeightExecutorScheduling:
 
         assert resolved == frozenset({datetime(2024, 1, 5), datetime(2024, 1, 12)})
 
-    def test_execute_requires_prepare_schedule_when_schedule_is_configured(self, broker, sample_data):
+    def test_execute_requires_prepare_schedule_when_schedule_is_configured(
+        self, broker, sample_data
+    ):
         executor = TargetWeightExecutor(
             config=RebalanceConfig(
                 schedule=RebalanceSchedule.explicit_timestamps([datetime(2024, 1, 2, 9, 30)])

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
+
 from ml4t.data.artifacts.market_data import FeedSpec
 
 from .analytics.annualization import get_annualization_factor, should_session_align
@@ -36,6 +37,7 @@ from .types import Fill, Trade
 if TYPE_CHECKING:
     from .analytics import EquityCurve, TradeAnalyzer
     from .config import BacktestConfig
+
 
 def _get_annualization_factor(calendar: str | None) -> int:
     """Backward-compatible wrapper for annualization lookup."""
