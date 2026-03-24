@@ -38,7 +38,7 @@ config = BacktestConfig(execution_mode=ExecutionMode.SAME_BAR)
 
 ### Execution Price
 
-The `execution_price` parameter controls which bar price is used for market order fills:
+The `execution_price` parameter controls which price source is used for market order fills:
 
 | Value | Fill Price | Typical Use |
 |-------|-----------|-------------|
@@ -46,6 +46,48 @@ The `execution_price` parameter controls which bar price is used for market orde
 | `CLOSE` | Current bar's close | VectorBT comparison |
 | `VWAP` | Volume-weighted average | Requires volume data |
 | `MID` | (high + low) / 2 | Simple approximation |
+| `PRICE` | `FeedSpec.price_col` / `bar["price"]` | Custom reference price, derived bars |
+| `BID` | Best bid quote | Passive or conservative sell-side marking |
+| `ASK` | Best ask quote | Aggressive buy-side fills |
+| `QUOTE_MID` | Quote midpoint | Microstructure-aware marking |
+| `QUOTE_SIDE` | Ask for buys, bid for sells | Side-aware market execution |
+
+`PRICE` is the default mark source and follows your feed schema. If you map `price_col="mid_price"`, then both `bar["price"]` and `ExecutionPrice.PRICE` use that midpoint.
+
+### Mark Price
+
+Open positions are marked independently of how market orders fill. `mark_price` uses the same `ExecutionPrice` enum as `execution_price`.
+
+This is useful when you want to:
+
+- fill orders at `QUOTE_SIDE` but mark inventory at `QUOTE_MID`
+- trade from a synthetic `price_col` while keeping fills at `OPEN` or `CLOSE`
+- mark long inventory conservatively on the bid and short inventory on the ask via `QUOTE_SIDE`
+
+```python
+from ml4t.backtest.config import ExecutionPrice
+
+config = BacktestConfig(
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_MID,
+)
+```
+
+If the requested quote field is unavailable, the broker falls back to the feed reference price and then to OHLC where applicable.
+
+### Quote-Aware Backtests
+
+When you provide bid/ask data and enable quote-aware execution or marking, the
+backtest is quote-aware, not just OHLCV-aware.
+
+That affects both execution and reporting:
+
+- fills preserve the quote source and nullable quote context used for execution
+- trades preserve entry and exit quote summaries
+- portfolio state reflects the configured `mark_price`
+
+This makes quote-side behavior auditable after the run instead of burying it in
+aggregate PnL only.
 
 ## Fill Ordering
 
@@ -101,7 +143,7 @@ When using EXIT_FIRST, entries are processed after exits. The `entry_order_prior
 
 ## Stop and Take-Profit Execution
 
-Position rules (StopLoss, TakeProfit, TrailingStop) are evaluated on every bar using OHLC data. The key question is: **at what price does a triggered stop fill?**
+Position rules (StopLoss, TakeProfit, TrailingStop) are evaluated on every bar using OHLC data. Quote-aware execution changes market fills and position marking, but stop triggers still evaluate against bar data. The key question is: **at what price does a triggered stop fill?**
 
 ### Stop Fill Modes
 
@@ -185,6 +227,26 @@ config = BacktestConfig(
 
 ## Commission and Slippage
 
+## Quote Context on Fills
+
+Every fill records the price source that was used along with nullable quote context:
+
+- `price_source`
+- `reference_price`
+- `quote_mid_price`
+- `bid_price`
+- `ask_price`
+- `spread`
+- `bid_size`
+- `ask_size`
+- `available_size`
+
+That data is available both in memory and in `result.to_fills_dataframe()` / `fills.parquet`, which makes it possible to audit quote-side behavior after the run.
+
+Trade summaries preserve the same context at entry and exit, and
+`result.to_portfolio_state_dataframe()` reflects the configured mark source for
+each end-of-bar snapshot.
+
 ### Commission Models
 
 | Type | Calculation | Config |
@@ -214,6 +276,13 @@ config = BacktestConfig(
 | `PERCENTAGE` | % of price | `slippage_rate=0.001` (0.1%) |
 | `FIXED` | Fixed $ per share | `slippage_fixed=0.01` |
 | `VOLUME_BASED` | Size vs volume | `slippage_rate=0.1` (10% volume limit) |
+
+Slippage models remain separate from quote-side execution:
+
+- `QUOTE_SIDE` crosses the observed spread using bid/ask quotes
+- slippage adds an extra synthetic execution penalty on top of the chosen source
+
+This lets you model spread and market impact separately.
 
 Stop orders can have additional slippage via `stop_slippage_rate`:
 

@@ -42,6 +42,10 @@ class _LegacyDataFeed:
         self._timestamps = sorted(all_ts)
         self._idx = 0
 
+    @property
+    def timestamps(self) -> tuple[datetime, ...]:
+        return tuple(self._timestamps)
+
     def _partition_by_timestamp(self, df: pl.DataFrame) -> dict[datetime, pl.DataFrame]:
         result: dict[datetime, pl.DataFrame] = {}
         for ts_df in df.partition_by("timestamp", maintain_order=True):
@@ -140,6 +144,20 @@ def _run_engine(feed_cls, prices: pl.DataFrame, signals: pl.DataFrame) -> float:
     return perf_counter() - start
 
 
+def _legacy_view(assets: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        asset: {
+            "open": data.get("open"),
+            "high": data.get("high"),
+            "low": data.get("low"),
+            "close": data.get("close"),
+            "volume": data.get("volume"),
+            "signals": data.get("signals", {}),
+        }
+        for asset, data in assets.items()
+    }
+
+
 @pytest.mark.benchmark
 def test_optimized_feed_matches_legacy_output():
     prices, signals = _build_benchmark_data(n_bars=50, n_assets=5)
@@ -152,7 +170,7 @@ def test_optimized_feed_matches_legacy_output():
         optimized, legacy, strict=True
     ):
         assert opt_ts == legacy_ts
-        assert dict(opt_assets) == legacy_assets
+        assert _legacy_view(dict(opt_assets)) == legacy_assets
         assert opt_ctx == legacy_ctx
 
 

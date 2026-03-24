@@ -2241,6 +2241,8 @@ class TestConvenienceMethods:
 
         # Should have 3 buy orders
         assert len(orders) == 3
+        assert len({order.rebalance_id for order in orders}) == 1
+        assert orders[0].rebalance_id is not None
 
         # All should be buy orders (starting from cash)
         for order in orders:
@@ -2273,6 +2275,7 @@ class TestConvenienceMethods:
         aapl_orders = [o for o in orders if o.asset == "AAPL"]
         assert len(aapl_orders) == 1
         assert aapl_orders[0].side == OrderSide.SELL
+        assert len({order.rebalance_id for order in orders}) == 1
 
 
 class TestP1PositionModification:

@@ -49,7 +49,27 @@ Account type is determined by the flag combination:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `execution_mode` | ExecutionMode | NEXT_BAR | When orders fill (SAME_BAR or NEXT_BAR) |
-| `execution_price` | ExecutionPrice | OPEN | Price used for market fills (OPEN, CLOSE, VWAP, MID) |
+| `execution_price` | ExecutionPrice | OPEN | Price used for market fills |
+| `mark_price` | ExecutionPrice | PRICE | Price used for open-position marking |
+
+Available `ExecutionPrice` values:
+
+| Value | Meaning |
+|-------|---------|
+| `OPEN` | Use the bar open |
+| `CLOSE` | Use the bar close |
+| `VWAP` | Use the feed reference price as a VWAP proxy |
+| `MID` | Use `(high + low) / 2` |
+| `PRICE` | Use `FeedSpec.price_col` / `bar["price"]` |
+| `BID` | Use best bid |
+| `ASK` | Use best ask |
+| `QUOTE_MID` | Use explicit or derived midpoint |
+| `QUOTE_SIDE` | Buy at ask, sell at bid; for marking, longs use bid and shorts use ask |
+
+Quote-aware settings change both execution semantics and reporting. When you use
+`BID`, `ASK`, `QUOTE_MID`, or `QUOTE_SIDE`, fills and trades preserve the
+underlying quote context and portfolio-state snapshots reflect the configured
+mark source.
 
 ### Stop Configuration
 
@@ -153,6 +173,7 @@ account:
   allow_leverage: false
 execution:
   execution_price: open
+  mark_price: price
   execution_mode: next_bar
 stops:
   stop_fill_mode: stop_price
@@ -199,6 +220,7 @@ config = BacktestConfig(
     initial_cash=100_000,
     execution_mode=ExecutionMode.NEXT_BAR,
     execution_price=ExecutionPrice.OPEN,
+    mark_price=ExecutionPrice.PRICE,
     commission_type=CommissionType.PERCENTAGE,
     commission_rate=0.002,
     slippage_type=SlippageType.PERCENTAGE,
@@ -217,6 +239,8 @@ config = BacktestConfig(
     initial_cash=10_000,
     allow_short_selling=True,
     execution_mode=ExecutionMode.SAME_BAR,
+    execution_price=ExecutionPrice.CLOSE,
+    mark_price=ExecutionPrice.PRICE,
     share_type=ShareType.FRACTIONAL,
     commission_type=CommissionType.PERCENTAGE,
     commission_rate=0.001,
@@ -233,10 +257,45 @@ config = BacktestConfig(
     commission_type=CommissionType.NONE,
     slippage_type=SlippageType.NONE,
     execution_mode=ExecutionMode.SAME_BAR,
+    mark_price=ExecutionPrice.PRICE,
     share_type=ShareType.FRACTIONAL,
     skip_cash_validation=True,
 )
 ```
+
+### Quote-Aware Microstructure
+
+```python
+config = BacktestConfig(
+    execution_mode=ExecutionMode.NEXT_BAR,
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_MID,
+    commission_type=CommissionType.PERCENTAGE,
+    commission_rate=0.0005,
+    slippage_type=SlippageType.NONE,
+)
+```
+
+This configuration:
+
+- crosses the spread at execution via `QUOTE_SIDE`
+- marks inventory at midpoint
+- keeps commission separate
+- avoids layering synthetic slippage on top unless you explicitly want extra impact
+
+### Quote-Aware Equities
+
+```python
+config = BacktestConfig(
+    execution_mode=ExecutionMode.SAME_BAR,
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_SIDE,
+    commission_type=CommissionType.NONE,
+    slippage_type=SlippageType.NONE,
+)
+```
+
+Use this with a `DataFeed` whose `FeedSpec` maps `price_col`, `bid_col`, `ask_col`, and optionally quote sizes.
 
 ## See It in Action
 

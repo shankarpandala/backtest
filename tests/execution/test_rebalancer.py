@@ -86,6 +86,8 @@ class TestTargetWeightExecutorBasic:
         orders = executor.execute(target_weights, sample_data, broker)
 
         assert len(orders) == 3
+        assert {order.rebalance_id for order in orders} == {orders[0].rebalance_id}
+        assert orders[0].rebalance_id is not None
         # Check all are BUY orders
         for order in orders:
             assert order.side == OrderSide.BUY
@@ -162,6 +164,19 @@ class TestTargetWeightExecutorBasic:
         asset_orders = {o.asset: o for o in orders}
         assert "GOOG" in asset_orders
         assert asset_orders["GOOG"].side == OrderSide.SELL
+        assert len({order.rebalance_id for order in orders}) == 1
+
+    def test_rebalance_ids_change_per_execute_call(self, broker, executor, sample_data):
+        """Each logical rebalance call should get its own identifier."""
+        first_orders = executor.execute({"AAPL": 0.3}, sample_data, broker)
+        broker._process_orders()
+        second_orders = executor.execute({"AAPL": 0.5}, sample_data, broker)
+
+        assert len(first_orders) == 1
+        assert len(second_orders) == 1
+        assert first_orders[0].rebalance_id is not None
+        assert second_orders[0].rebalance_id is not None
+        assert first_orders[0].rebalance_id != second_orders[0].rebalance_id
 
 
 class TestTargetWeightExecutorThresholds:
@@ -908,9 +923,13 @@ class TestTargetWeightExecutorIntegration:
         target1 = {"AAPL": 0.3, "GOOG": 0.3, "MSFT": 0.4}
         orders1 = executor.execute(target1, data, broker)
         assert len(orders1) == 3
+        first_rebalance_id = orders1[0].rebalance_id
+        assert first_rebalance_id is not None
+        assert {order.rebalance_id for order in orders1} == {first_rebalance_id}
 
         # Process orders
         broker._process_orders()
+        assert {fill.rebalance_id for fill in broker.fills} == {first_rebalance_id}
 
         # Step 2: Rebalance to 50/50/0 (close MSFT)
         target2 = {"AAPL": 0.5, "GOOG": 0.5}
@@ -918,6 +937,9 @@ class TestTargetWeightExecutorIntegration:
 
         # Should have AAPL buy, GOOG buy, MSFT sell (close)
         assert len(orders2) >= 2
+        assert orders2[0].rebalance_id is not None
+        assert {order.rebalance_id for order in orders2} == {orders2[0].rebalance_id}
+        assert orders2[0].rebalance_id != first_rebalance_id
 
 
 class TestTargetWeightExecutorModes:

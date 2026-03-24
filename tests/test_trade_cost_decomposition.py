@@ -138,7 +138,7 @@ class TestTradeComputedProperties:
             pnl_percent=0.10,
             bars_held=4,
             fees=20.0,
-            slippage=0.05,
+            exit_slippage=0.05,
             entry_slippage=0.03,
             multiplier=1.0,
         )
@@ -156,7 +156,7 @@ class TestTradeComputedProperties:
             pnl_percent=0.10,
             bars_held=4,
             fees=20.0,
-            slippage=0.05,
+            exit_slippage=0.05,
             entry_slippage=0.03,
             multiplier=1.0,
         )
@@ -174,7 +174,7 @@ class TestTradeComputedProperties:
             pnl_percent=0.002,  # 10/5000
             bars_held=4,
             fees=9.0,
-            slippage=0.25,
+            exit_slippage=0.25,
             entry_slippage=0.25,
             multiplier=50.0,
         )
@@ -357,7 +357,7 @@ class TestEntrySlippage:
 
 class TestParquetRoundtrip:
     def test_new_fields_survive_roundtrip(self, tmp_path):
-        """entry_slippage and multiplier survive write/read."""
+        """entry_slippage, exit_slippage, and multiplier survive write/read."""
         from ml4t.backtest.result import BacktestResult
 
         trades = [
@@ -372,7 +372,7 @@ class TestParquetRoundtrip:
                 pnl_percent=0.002,
                 bars_held=1,
                 fees=9.0,
-                slippage=0.25,
+                exit_slippage=0.25,
                 entry_slippage=0.25,
                 multiplier=50.0,
             )
@@ -389,6 +389,7 @@ class TestParquetRoundtrip:
 
         assert len(loaded.trades) == 1
         t = loaded.trades[0]
+        assert t.exit_slippage == pytest.approx(0.25)
         assert t.entry_slippage == pytest.approx(0.25)
         assert t.multiplier == pytest.approx(50.0)
         assert t.gross_pnl == pytest.approx(1000.0)
@@ -411,7 +412,7 @@ class TestParquetRoundtrip:
                 "pnl_percent": [0.10],
                 "bars_held": [1],
                 "fees": [0.0],
-                "slippage": [0.0],
+                "slippage": [0.12],
                 "mfe": [0.12],
                 "mae": [-0.03],
                 "exit_reason": ["signal"],
@@ -428,6 +429,7 @@ class TestParquetRoundtrip:
         loaded = BacktestResult.from_parquet(result_dir)
         assert len(loaded.trades) == 1
         t = loaded.trades[0]
+        assert t.exit_slippage == pytest.approx(0.12)  # Legacy slippage column maps through
         assert t.entry_slippage == 0.0  # Default
         assert t.multiplier == 1.0  # Default
         assert t.gross_pnl == pytest.approx(1000.0)

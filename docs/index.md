@@ -34,6 +34,8 @@ result = run_backtest(prices, BuyAndHold(), config="backtrader")
 
 **Configurable execution semantics.** Every behavioral difference between backtesting frameworks (fill ordering, stop modes, cash policies, settlement) is a named config parameter. Switch profiles to replicate any framework exactly.
 
+**Quote-aware when you need it.** The feed can cache bid, ask, midpoint, and quote sizes additively. Market execution and position marking can use `price`, `bid`, `ask`, `quote_mid`, or `quote_side`.
+
 **Validated at scale.** 225,000+ trades verified trade-by-trade against VectorBT Pro, Backtrader, Zipline, and LEAN on real market data (250 assets x 20 years).
 
 **Fast.** 19x faster than Backtrader, 8x faster than Zipline, 5x faster than LEAN on identical workloads. Processes 40,000+ bars/second across 250 assets.
@@ -42,9 +44,11 @@ result = run_backtest(prices, BuyAndHold(), config="backtrader")
 |---------|-------------|
 | Event-driven | Point-in-time correctness, no look-ahead bias |
 | 40+ behavioral knobs | Every execution detail is configurable |
+| Quote-aware execution | Side-aware fills and separate mark pricing |
 | 10 framework profiles | Match VectorBT, Backtrader, Zipline, LEAN exactly |
 | Risk management | Stop-loss, take-profit, trailing stops, portfolio limits |
 | Multi-asset | Rebalancing, weight targets, exit-first ordering |
+| Rich persistence | Export trades, fills, equity, portfolio state, and daily P&L to Parquet |
 
 ## Parity Validation
 

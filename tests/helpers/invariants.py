@@ -196,7 +196,7 @@ def _check_no_nan(result: BacktestResult) -> None:
         "pnl",
         "pnl_percent",
         "fees",
-        "slippage",
+        "exit_slippage",
         "mfe",
         "mae",
         "entry_slippage",

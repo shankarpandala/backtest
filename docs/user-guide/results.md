@@ -1,6 +1,12 @@
 # Results & Analysis
 
-`Engine.run()` returns a `BacktestResult` containing trades, equity curve, fills, and computed metrics. Everything is accessible as Python objects, Polars DataFrames, or Parquet files.
+`Engine.run()` returns a `BacktestResult` containing trades, equity curve, fills,
+portfolio state, and computed metrics. Everything is accessible as Python objects,
+Polars DataFrames, or Parquet files.
+
+This applies to both classic OHLCV backtests and quote-aware backtests. When you run
+with bid/ask-aware execution or marking, the result surface preserves the quote
+context used to produce fills and trade summaries.
 
 ## Metrics
 
@@ -21,6 +27,9 @@ print(f"Calmar:        {m['calmar']:.2f}")
 
 # Trades
 print(f"Trades:        {m['num_trades']}")
+print(f"Fills:         {m['num_fills']}")
+print(f"Rebalances:    {m['num_rebalance_events']}")
+print(f"Symbols:       {m['unique_symbols_traded']}")
 print(f"Win Rate:      {m['win_rate']:.1%}")
 print(f"Profit Factor: {m['profit_factor']:.2f}")
 print(f"Expectancy:    ${m['expectancy']:.2f}")
@@ -40,6 +49,11 @@ print(f"Commission:    ${m['total_commission']:.2f}")
 print(f"Slippage:      ${m['total_slippage']:.2f}")
 print(f"Total Costs:   ${m['total_costs']:.2f}")
 print(f"Avg Cost Drag: {m['avg_cost_drag']:.4%}")
+print(f"Filled Notional: ${m['total_filled_notional']:,.2f}")
+print(f"Avg Turnover:    {m['avg_turnover']:.2%}")
+print(f"Max Turnover:    {m['max_turnover']:.2%}")
+print(f"Avg Open Pos:    {m['avg_open_positions']:.2f}")
+print(f"Max Open Pos:    {m['max_open_positions']}")
 
 # Gross vs Net
 print(f"Gross P&L:     ${m['total_gross_pnl']:.2f}")
@@ -63,6 +77,9 @@ print(f"Net PF:        {m['profit_factor']:.2f}")
 | `sortino` | Sortino ratio |
 | `calmar` | Calmar ratio |
 | `num_trades` | Total completed trades |
+| `num_fills` | Total execution events |
+| `num_rebalance_events` | Unique timestamps with at least one fill |
+| `unique_symbols_traded` | Number of symbols with at least one fill |
 | `winning_trades` | Number of winning trades |
 | `losing_trades` | Number of losing trades |
 | `win_rate` | Win rate (0 to 1) |
@@ -75,12 +92,40 @@ print(f"Net PF:        {m['profit_factor']:.2f}")
 | `largest_loss` | Worst single trade return (decimal, negative) |
 | `payoff_ratio` | avg_win / \|avg_loss\| (size-normalized reward-to-risk) |
 | `total_commission` | Total commission paid |
-| `total_slippage` | Total slippage cost (entry + exit) |
+| `total_slippage` | Total slippage cost in dollars (entry + exit) |
+| `total_filled_notional` | Sum of absolute filled notional across all fills |
+| `avg_turnover` | Mean per-bar one-way turnover from fills |
+| `max_turnover` | Maximum per-bar one-way turnover from fills |
+| `avg_open_positions` | Mean number of open positions across bars |
+| `max_open_positions` | Maximum number of open positions across bars |
 | `total_gross_pnl` | Total P&L from price moves only (before costs) |
 | `total_costs` | Total transaction costs (commission + slippage) |
 | `avg_cost_drag` | Average cost as fraction of trade notional |
 | `gross_profit_factor` | Profit factor from raw price moves (isolates edge from costs) |
 | `skipped_bars` | Bars skipped by calendar filter |
+
+### Reporting Model
+
+`BacktestResult` now exposes three distinct raw reporting surfaces:
+
+- `trades`: flat-to-flat lifecycle summaries
+- `fills`: execution blotter rows
+- `portfolio_state`: end-of-bar portfolio snapshots
+
+For rebalancing strategies, `num_trades` is not the right proxy for trading activity.
+Use `num_fills`, `num_rebalance_events`, and `total_filled_notional` instead.
+
+Turnover uses a one-way execution-based definition:
+
+```python
+turnover_t = filled_notional_at_timestamp / equity_at_timestamp
+```
+
+Bars with no fills contribute `0`. This means:
+
+- buying a fully cash portfolio into a fully invested book is turnover `1.0`
+- selling a fully invested book back to cash is turnover `1.0`
+- fully rotating one full book into another is turnover `2.0`
 
 ### Cost Decomposition
 
@@ -102,10 +147,26 @@ for trade in result.trades:
 | `trade.cost_drag` | Total cost as fraction of notional |
 | `trade.fees` | Total commission (entry + exit) |
 | `trade.entry_slippage` | Per-unit slippage on entry |
-| `trade.slippage` | Per-unit slippage on exit |
+| `trade.exit_slippage` | Per-unit slippage on exit |
 | `trade.multiplier` | Contract multiplier (1.0 for equities, 50.0 for ES futures) |
 
+Trade records also summarize nullable quote context for the entry and exit:
+
+| Property | Description |
+|----------|-------------|
+| `trade.entry_quote_mid_price` / `trade.exit_quote_mid_price` | Quote midpoint at fill time |
+| `trade.entry_bid_price` / `trade.exit_bid_price` | Best bid at fill time |
+| `trade.entry_ask_price` / `trade.exit_ask_price` | Best ask at fill time |
+| `trade.entry_spread` / `trade.exit_spread` | Bid/ask spread at fill time |
+| `trade.entry_available_size` / `trade.exit_available_size` | Side-aware available quote size |
+
 `pnl_percent` is direction-aware: positive means profitable for both long and short trades.
+
+Quote-aware backtests therefore leave an explicit audit trail:
+
+- fills record the reference price, bid, ask, midpoint, spread, and available size
+- trades summarize entry/exit quote context
+- portfolio state reflects the configured `mark_price`
 
 ## Trade Analyzer
 
@@ -159,11 +220,21 @@ Returns a Polars DataFrame with columns:
 | `pnl_percent` | Float | Direction-aware percentage return |
 | `bars_held` | Int | Holding period |
 | `fees` | Float | Total commission |
-| `slippage` | Float | Exit slippage |
+| `exit_slippage` | Float | Exit slippage |
 | `mfe` | Float | Maximum favorable excursion |
 | `mae` | Float | Maximum adverse excursion |
 | `entry_slippage` | Float | Per-unit slippage on entry |
 | `multiplier` | Float | Contract multiplier (futures) |
+| `entry_quote_mid_price` | Float | Entry quote midpoint |
+| `entry_bid_price` | Float | Entry best bid |
+| `entry_ask_price` | Float | Entry best ask |
+| `entry_spread` | Float | Entry spread |
+| `entry_available_size` | Float | Entry-side available size |
+| `exit_quote_mid_price` | Float | Exit quote midpoint |
+| `exit_bid_price` | Float | Exit best bid |
+| `exit_ask_price` | Float | Exit best ask |
+| `exit_spread` | Float | Exit spread |
+| `exit_available_size` | Float | Exit-side available size |
 | `gross_pnl` | Float | Price-move P&L before fees |
 | `net_return` | Float | Direction-aware net return including fees |
 | `total_slippage_cost` | Float | Entry + exit slippage in dollars |
@@ -191,6 +262,31 @@ Returns a Polars DataFrame with columns:
 | `drawdown` | Float | Current drawdown from HWM |
 | `high_water_mark` | Float | Running maximum equity |
 
+## Portfolio State DataFrame
+
+```python
+portfolio_df = result.to_portfolio_state_dataframe()
+print(portfolio_df.head())
+```
+
+Returns a Polars DataFrame with columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `timestamp` | Datetime | Bar timestamp |
+| `equity` | Float | Portfolio equity after bar processing |
+| `cash` | Float | Cash balance |
+| `gross_exposure` | Float | Sum of absolute marked position values |
+| `net_exposure` | Float | Signed sum of marked position values |
+| `open_positions` | Int | Number of open positions |
+
+This is the right primitive for downstream diagnostics such as:
+
+- average invested fraction
+- gross and net exposure analysis
+- time in market
+- occupancy and utilization metrics
+
 ## Fills
 
 Access every individual order fill:
@@ -203,6 +299,13 @@ for fill in result.fills:
     print(f"  Slippage: ${fill.slippage:.4f}")
 ```
 
+Or convert them directly to a Polars DataFrame:
+
+```python
+fills_df = result.to_fills_dataframe()
+print(fills_df.select(["asset", "side", "price", "price_source", "bid_price", "ask_price"]))
+```
+
 Fill objects carry order-type metadata for audit:
 
 | Field | Description |
@@ -213,6 +316,21 @@ Fill objects carry order-type metadata for audit:
 | `fill.price` | Actual fill price |
 | `fill.commission` | Commission charged |
 | `fill.slippage` | Slippage applied |
+| `fill.price_source` | Configured source used for the fill |
+| `fill.reference_price` | Feed reference price (`bar["price"]`) |
+| `fill.quote_mid_price` | Quote midpoint at fill time |
+| `fill.bid_price` / `fill.ask_price` | Best bid / ask |
+| `fill.spread` | Bid-ask spread |
+| `fill.bid_size` / `fill.ask_size` | Quote sizes |
+| `fill.available_size` | Side-aware size used for the fill context |
+
+For quote-aware backtests, `fills.parquet` is the first place to look when you want
+to verify whether a result difference came from:
+
+- quote-side execution
+- synthetic slippage
+- commission
+- the configured mark source
 
 ## Dictionary Output
 
@@ -228,9 +346,16 @@ result_dict = result.to_dict()
 Save results for later analysis or integration with ml4t-diagnostic:
 
 ```python
-# Export trades and equity to Parquet
+# Export all result components to Parquet / JSON / YAML
 result.to_parquet("./results/my_backtest")
-# Creates: my_backtest_trades.parquet, my_backtest_equity.parquet
+# Creates:
+#   trades.parquet
+#   fills.parquet
+#   equity.parquet
+#   portfolio_state.parquet
+#   daily_pnl.parquet
+#   metrics.json
+#   config.yaml  # when config is attached
 
 # Reload later
 from ml4t.backtest.result import BacktestResult
@@ -262,6 +387,12 @@ monthly = analysis.compute_monthly_returns()
 The helper extracts daily returns via `to_daily_pnl()` and sets
 `periods_per_year` from the calendar (252 for NYSE, 365 for crypto, etc.).
 If no calendar is passed, it uses the config's calendar.
+
+For richer diagnostics, pass these alongside returns:
+
+- `result.to_trades_dataframe()`
+- `result.to_fills_dataframe()`
+- `result.to_portfolio_state_dataframe()`
 
 ```python
 # Crypto backtest

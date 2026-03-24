@@ -145,6 +145,7 @@ class Order:
     stop_price: float | None = None
     trail_amount: float | None = None
     parent_id: str | None = None
+    rebalance_id: str | None = None
     order_id: str = ""
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime | None = None
@@ -343,11 +344,21 @@ class Fill:
     quantity: float
     price: float
     timestamp: datetime
+    rebalance_id: str | None = None
     commission: float = 0.0
     slippage: float = 0.0
     order_type: str = ""  # OrderType.value string (for fill-level invariants)
     limit_price: float | None = None  # For limit bound checking
     stop_price: float | None = None  # For stop bound checking
+    price_source: str = ""
+    reference_price: float | None = None
+    quote_mid_price: float | None = None
+    bid_price: float | None = None
+    ask_price: float | None = None
+    spread: float | None = None
+    bid_size: float | None = None
+    ask_size: float | None = None
+    available_size: float | None = None
 
 
 @dataclass
@@ -377,7 +388,7 @@ class Trade:
     pnl_percent: float
     bars_held: int
     fees: float = 0.0  # Total transaction fees (aligned with ml4t-diagnostic)
-    slippage: float = 0.0
+    exit_slippage: float = 0.0  # Per-unit slippage on exit
     # Exit reason for trade analysis (cross-library API field)
     exit_reason: str = "signal"  # ExitReason enum value as string
     # Trade status: "closed" (actually exited) or "open" (mark-to-market at end)
@@ -388,6 +399,16 @@ class Trade:
     # Cost decomposition fields
     entry_slippage: float = 0.0  # Per-unit slippage on entry
     multiplier: float = 1.0  # Contract multiplier (for futures)
+    entry_quote_mid_price: float | None = None
+    entry_bid_price: float | None = None
+    entry_ask_price: float | None = None
+    entry_spread: float | None = None
+    entry_available_size: float | None = None
+    exit_quote_mid_price: float | None = None
+    exit_bid_price: float | None = None
+    exit_ask_price: float | None = None
+    exit_spread: float | None = None
+    exit_available_size: float | None = None
     # Optional metadata extension point
     metadata: dict[str, Any] | None = None
 
@@ -432,7 +453,7 @@ class Trade:
     @property
     def total_slippage_cost(self) -> float:
         """Total slippage cost in dollars (entry + exit)."""
-        return (self.entry_slippage + self.slippage) * abs(self.quantity) * self.multiplier
+        return (self.entry_slippage + self.exit_slippage) * abs(self.quantity) * self.multiplier
 
     @property
     def cost_drag(self) -> float:

@@ -61,6 +61,7 @@ class Broker:
         stop_slippage_rate: float = 0.0,
         execution_mode: ExecutionMode = ExecutionMode.SAME_BAR,
         execution_price: ExecutionPrice = ExecutionPrice.CLOSE,
+        mark_price: ExecutionPrice = ExecutionPrice.PRICE,
         stop_fill_mode: StopFillMode = StopFillMode.STOP_PRICE,
         stop_level_basis: StopLevelBasis = StopLevelBasis.FILL_PRICE,
         trail_hwm_source: WaterMarkSource = WaterMarkSource.CLOSE,
@@ -112,6 +113,7 @@ class Broker:
         self.stop_slippage_rate = stop_slippage_rate
         self.execution_mode = execution_mode
         self.execution_price = execution_price
+        self.mark_price = mark_price
         self.stop_fill_mode = stop_fill_mode
         self.stop_level_basis = stop_level_basis
         self.trail_hwm_source = trail_hwm_source
@@ -188,14 +190,21 @@ class Broker:
         self.trades: list[Trade] = []
         self._order_counter = 0
         self._current_time: datetime | None = None
-        self._current_prices: dict[str, float] = {}  # close prices
+        self._current_prices: dict[str, float] = {}  # FeedSpec.price_col values
         self._current_opens: dict[str, float] = {}  # open prices for next-bar execution
         self._current_highs: dict[str, float] = {}  # high prices for limit/stop checks
         self._current_lows: dict[str, float] = {}  # low prices for limit/stop checks
+        self._current_closes: dict[str, float] = {}
         self._current_volumes: dict[str, float] = {}
+        self._current_bids: dict[str, float] = {}
+        self._current_asks: dict[str, float] = {}
+        self._current_mids: dict[str, float] = {}
+        self._current_bid_sizes: dict[str, float] = {}
+        self._current_ask_sizes: dict[str, float] = {}
         self._current_signals: dict[str, dict[str, float]] = {}
         self._last_prices: dict[str, float] = {}
         self._asset_bars_seen: dict[str, int] = {}
+        self._rebalance_counter = 0
         self._orders_this_bar: list[Order] = []  # Orders placed this bar (for next-bar mode)
         self._orders_this_bar_ids: set[str] = set()
 
@@ -312,6 +321,7 @@ class Broker:
             stop_slippage_rate=config.stop_slippage_rate,
             execution_mode=config.execution_mode,
             execution_price=config.execution_price,
+            mark_price=config.mark_price,
             stop_fill_mode=config.stop_fill_mode,
             stop_level_basis=config.stop_level_basis,
             trail_hwm_source=config.trail_hwm_source,
@@ -365,6 +375,133 @@ class Broker:
         """Get contract multiplier for an asset (1.0 for equities)."""
         spec = self._contract_specs.get(asset)
         return spec.multiplier if spec else 1.0
+
+    def _next_rebalance_id(self) -> str:
+        self._rebalance_counter += 1
+        return f"rebalance-{self._rebalance_counter}"
+
+    def get_quote_mid(self, asset: str) -> float | None:
+        """Return explicit quote midpoint or derive it from bid/ask."""
+        mid = self._current_mids.get(asset)
+        if mid is not None:
+            return mid
+        bid = self._current_bids.get(asset)
+        ask = self._current_asks.get(asset)
+        if bid is not None and ask is not None:
+            return (bid + ask) / 2.0
+        return None
+
+    def get_price_for_source(
+        self,
+        source: ExecutionPrice,
+        asset: str,
+        *,
+        side: OrderSide | None = None,
+        quantity: float | None = None,
+        use_open: bool = False,
+    ) -> float | None:
+        """Resolve a configured price source with sensible OHLCV fallbacks."""
+        if (
+            use_open
+            and self.execution_mode == ExecutionMode.NEXT_BAR
+            and source
+            not in {
+                ExecutionPrice.BID,
+                ExecutionPrice.ASK,
+                ExecutionPrice.QUOTE_MID,
+                ExecutionPrice.QUOTE_SIDE,
+            }
+        ):
+            return self._current_opens.get(asset, self._current_prices.get(asset))
+
+        if source == ExecutionPrice.PRICE:
+            return self._current_prices.get(asset, self._current_closes.get(asset))
+        if source == ExecutionPrice.CLOSE:
+            return self._current_closes.get(asset, self._current_prices.get(asset))
+        if source == ExecutionPrice.OPEN:
+            return self._current_opens.get(asset, self._current_prices.get(asset))
+        if source == ExecutionPrice.MID:
+            high = self._current_highs.get(asset)
+            low = self._current_lows.get(asset)
+            if high is not None and low is not None:
+                return (high + low) / 2.0
+            return self._current_prices.get(asset, self._current_closes.get(asset))
+        if source == ExecutionPrice.VWAP:
+            return self._current_prices.get(asset, self._current_closes.get(asset))
+        if source == ExecutionPrice.BID:
+            return self._current_bids.get(asset, self._current_prices.get(asset))
+        if source == ExecutionPrice.ASK:
+            return self._current_asks.get(asset, self._current_prices.get(asset))
+        if source == ExecutionPrice.QUOTE_MID:
+            return self.get_quote_mid(asset) or self._current_prices.get(asset)
+        if source == ExecutionPrice.QUOTE_SIDE:
+            if side is None and quantity is not None:
+                side = OrderSide.BUY if quantity > 0 else OrderSide.SELL
+            if side == OrderSide.BUY:
+                return self._current_asks.get(
+                    asset,
+                    self._current_opens.get(asset) if use_open else self._current_prices.get(asset),
+                )
+            if side == OrderSide.SELL:
+                return self._current_bids.get(
+                    asset,
+                    self._current_opens.get(asset) if use_open else self._current_prices.get(asset),
+                )
+            return self.get_quote_mid(asset) or self._current_prices.get(asset)
+        return self._current_prices.get(asset, self._current_closes.get(asset))
+
+    def get_mark_price(
+        self,
+        asset: str,
+        *,
+        quantity: float | None = None,
+        use_open: bool = False,
+    ) -> float | None:
+        """Resolve the configured mark price for an asset."""
+        mark_side = None
+        if self.mark_price == ExecutionPrice.QUOTE_SIDE and quantity is not None:
+            mark_side = OrderSide.SELL if quantity > 0 else OrderSide.BUY
+        return self.get_price_for_source(
+            self.mark_price,
+            asset,
+            side=mark_side,
+            quantity=quantity,
+            use_open=use_open,
+        )
+
+    def get_available_size(self, asset: str, side: OrderSide | None = None) -> float | None:
+        """Return side-aware quote size when available, otherwise bar volume."""
+        if side == OrderSide.BUY:
+            return self._current_ask_sizes.get(asset, self._current_volumes.get(asset))
+        if side == OrderSide.SELL:
+            return self._current_bid_sizes.get(asset, self._current_volumes.get(asset))
+        return self._current_volumes.get(asset)
+
+    def get_quote_context(
+        self, asset: str, side: OrderSide | None = None
+    ) -> dict[str, float | None]:
+        """Return quote context for fills and trade summaries."""
+        bid = self._current_bids.get(asset)
+        ask = self._current_asks.get(asset)
+        quote_mid = self.get_quote_mid(asset)
+        spread = ask - bid if bid is not None and ask is not None else None
+        return {
+            "reference_price": self._current_prices.get(asset),
+            "quote_mid_price": quote_mid,
+            "bid_price": bid,
+            "ask_price": ask,
+            "spread": spread,
+            "bid_size": self._current_bid_sizes.get(asset),
+            "ask_size": self._current_ask_sizes.get(asset),
+            "available_size": self.get_available_size(asset, side),
+        }
+
+    def mark_account_positions(self, use_open: bool = False) -> None:
+        """Synchronize account position marks using configured price semantics."""
+        for asset, position in self.account.positions.items():
+            mark_price = self.get_mark_price(asset, quantity=position.quantity, use_open=use_open)
+            if mark_price is not None:
+                position.current_price = mark_price
 
     # === Trading Statistics ===
 
@@ -804,7 +941,9 @@ class Broker:
     def cancel_order(self, order_id: str) -> bool:
         return self._order_book.cancel_order(order_id)
 
-    def close_position(self, asset: str) -> Order | None:
+    def close_position(
+        self, asset: str, _options: SubmitOrderOptions | None = None
+    ) -> Order | None:
         """Close an open position for the given asset.
 
         Submits a market order to fully close the position.
@@ -822,7 +961,7 @@ class Broker:
         pos = self.positions.get(asset)
         if pos and pos.quantity != 0:
             side = OrderSide.SELL if pos.quantity > 0 else OrderSide.BUY
-            return self.submit_order(asset, abs(pos.quantity), side)
+            return self.submit_order(asset, abs(pos.quantity), side, _options=_options)
         return None
 
     # === Position Modification (P1 Features) ===
@@ -1215,6 +1354,7 @@ class Broker:
         price: float,
         order_type: OrderType,
         limit_price: float | None,
+        _options: SubmitOrderOptions | None = None,
     ) -> Order | None:
         """Internal helper to order toward a target value."""
         # Bug #2 fix: Include contract multiplier in value calculations
@@ -1238,11 +1378,21 @@ class Broker:
         # Submit order
         if delta_qty > 0:
             return self.submit_order(
-                asset, delta_qty, OrderSide.BUY, order_type, limit_price=limit_price
+                asset,
+                delta_qty,
+                OrderSide.BUY,
+                order_type,
+                limit_price=limit_price,
+                _options=_options,
             )
         elif delta_qty < 0:
             return self.submit_order(
-                asset, abs(delta_qty), OrderSide.SELL, order_type, limit_price=limit_price
+                asset,
+                abs(delta_qty),
+                OrderSide.SELL,
+                order_type,
+                limit_price=limit_price,
+                _options=_options,
             )
         return None
 
@@ -1279,6 +1429,7 @@ class Broker:
         orders: list[Order] = []
         sells: list[tuple[str, float]] = []  # (asset, target_value)
         buys: list[tuple[str, float]] = []  # (asset, target_value)
+        rebalance_id: str | None = None
 
         scaled_weights = {
             asset: weight * self.rebalance_headroom_pct for asset, weight in target_weights.items()
@@ -1298,6 +1449,12 @@ class Broker:
             if self.late_asset_policy != LateAssetPolicy.REQUIRE_HISTORY:
                 return True
             return self._asset_bars_seen.get(asset, 0) >= self.late_asset_min_bars
+
+        def rebalance_options() -> SubmitOrderOptions:
+            nonlocal rebalance_id
+            if rebalance_id is None:
+                rebalance_id = self._next_rebalance_id()
+            return SubmitOrderOptions(rebalance_id=rebalance_id)
 
         # Calculate target values and categorize as buys or sells
         for asset, weight in scaled_weights.items():
@@ -1332,7 +1489,14 @@ class Broker:
         for asset, target_value in sells:
             price = resolve_price(asset)
             if price is not None:
-                order = self._order_to_target_value(asset, target_value, price, order_type, None)
+                order = self._order_to_target_value(
+                    asset,
+                    target_value,
+                    price,
+                    order_type,
+                    None,
+                    rebalance_options(),
+                )
                 if order:
                     orders.append(order)
 
@@ -1340,7 +1504,14 @@ class Broker:
         for asset, target_value in buys:
             price = resolve_price(asset)
             if price is not None:
-                order = self._order_to_target_value(asset, target_value, price, order_type, None)
+                order = self._order_to_target_value(
+                    asset,
+                    target_value,
+                    price,
+                    order_type,
+                    None,
+                    rebalance_options(),
+                )
                 if order:
                     orders.append(order)
 
@@ -1372,17 +1543,57 @@ class Broker:
         timestamp: datetime,
         prices: dict[str, float],
         opens: dict[str, float],
-        highs: dict[str, float],
-        lows: dict[str, float],
-        volumes: dict[str, float],
-        signals: dict[str, dict],
+        highs: dict[str, float] | None = None,
+        lows: dict[str, float] | None = None,
+        *rest,
+        **kwargs,
     ):
+        if kwargs:
+            if rest:
+                raise TypeError("_update_time does not accept mixed positional/keyword cache args")
+            highs = highs if highs is not None else kwargs.pop("highs", None)
+            lows = lows if lows is not None else kwargs.pop("lows", None)
+            closes = kwargs.pop("closes", prices)
+            volumes = kwargs.pop("volumes")
+            bids = kwargs.pop("bids", {})
+            asks = kwargs.pop("asks", {})
+            mids = kwargs.pop("mids", {})
+            bid_sizes = kwargs.pop("bid_sizes", {})
+            ask_sizes = kwargs.pop("ask_sizes", {})
+            signals = kwargs.pop("signals")
+            if kwargs:
+                raise TypeError(f"_update_time got unexpected keyword arguments: {sorted(kwargs)}")
+        elif len(rest) == 2:
+            volumes, signals = rest
+            closes = prices
+            bids = {}
+            asks = {}
+            mids = {}
+            bid_sizes = {}
+            ask_sizes = {}
+        elif len(rest) == 8:
+            closes, volumes, bids, asks, mids, bid_sizes, ask_sizes, signals = rest
+        else:
+            raise TypeError(
+                "_update_time expects either legacy arguments "
+                "(timestamp, prices, opens, highs, lows, volumes, signals) "
+                "or quote-aware arguments with closes/bid/ask caches."
+            )
+        if highs is None or lows is None:
+            raise TypeError("_update_time requires highs and lows")
+
         self._current_time = timestamp
         self._current_prices = prices
         self._current_opens = opens
         self._current_highs = highs
         self._current_lows = lows
+        self._current_closes = closes
         self._current_volumes = volumes
+        self._current_bids = bids
+        self._current_asks = asks
+        self._current_mids = mids
+        self._current_bid_sizes = bid_sizes
+        self._current_ask_sizes = ask_sizes
         self._current_signals = signals
         self._bar_index += 1
 

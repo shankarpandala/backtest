@@ -28,7 +28,6 @@ class ExecutionEngine:
     def _process_orders_exit_first(self, use_open: bool = False):
         broker = self.broker
         fill = broker._fill_engine
-        mark_prices = broker._current_opens if use_open else broker._current_prices
         exit_orders = []
         entry_orders = []
         orders_this_bar_ids = broker._orders_this_bar_ids
@@ -59,7 +58,7 @@ class ExecutionEngine:
                 else:
                     fill.update_partial_order(order)
 
-        broker.account.mark_to_market(mark_prices)
+        broker.mark_account_positions(use_open=use_open)
         entry_orders = self._sort_entry_orders(entry_orders, use_open=use_open)
 
         for order in entry_orders:
@@ -69,7 +68,6 @@ class ExecutionEngine:
 
     def _process_orders_fifo(self, use_open: bool = False):
         broker = self.broker
-        mark_prices = broker._current_opens if use_open else broker._current_prices
         eligible_orders = []
         orders_this_bar_ids = broker._orders_this_bar_ids
         for order in broker.pending_orders[:]:
@@ -85,7 +83,7 @@ class ExecutionEngine:
         for order in eligible_orders:
             self._process_single_order(order, use_open, filled_orders)
             if filled_orders and filled_orders[-1] is order:
-                broker.account.mark_to_market(mark_prices)
+                broker.mark_account_positions(use_open=use_open)
 
         self._cleanup_filled_orders(filled_orders)
 
@@ -105,7 +103,6 @@ class ExecutionEngine:
         """
         broker = self.broker
         fill = broker._fill_engine
-        mark_prices = broker._current_opens if use_open else broker._current_prices
         eligible_orders = []
         orders_this_bar_ids = broker._orders_this_bar_ids
         for order in broker.pending_orders[:]:
@@ -150,7 +147,7 @@ class ExecutionEngine:
 
             # Mark-to-market after every fill so the next order sees updated cash
             if filled_orders and filled_orders[-1] is order:
-                broker.account.mark_to_market(mark_prices)
+                broker.mark_account_positions(use_open=use_open)
 
         self._cleanup_filled_orders(filled_orders)
 
@@ -330,14 +327,13 @@ class ExecutionEngine:
     def _sort_entry_orders(self, orders: list, use_open: bool) -> list:
         """Sort entry orders under EXIT_FIRST based on configured priority."""
         broker = self.broker
+        fill = broker._fill_engine
         priority = broker.entry_order_priority.value
         if priority == "submission":
             return orders
 
-        prices = broker._current_opens if use_open else broker._current_prices
-
         def notional(order) -> float:
-            px = prices.get(order.asset)
+            px = fill.get_fill_price_for_order(order, use_open)
             if px is None:
                 px = broker._current_prices.get(
                     order.asset, broker._current_opens.get(order.asset, 0.0)

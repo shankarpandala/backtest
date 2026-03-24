@@ -22,6 +22,7 @@ from ml4t.backtest.config import (
     CommissionType,
     DataFrequency,
     EntryOrderPriority,
+    ExecutionPrice,
     FillOrdering,
     ShareType,
     ShortCashPolicy,
@@ -847,11 +848,13 @@ class TestImmediateFill:
         assert config.settlement_delay == 2
 
     def test_to_dict_from_dict_roundtrip(self):
-        config = BacktestConfig(immediate_fill=True)
+        config = BacktestConfig(immediate_fill=True, mark_price=ExecutionPrice.QUOTE_MID)
         d = config.to_dict()
         assert d["orders"]["immediate_fill"] is True
+        assert d["execution"]["mark_price"] == "quote_mid"
         restored = BacktestConfig.from_dict(d)
         assert restored.immediate_fill is True
+        assert restored.mark_price == ExecutionPrice.QUOTE_MID
 
 
 class TestFromDictDefaultParity:
@@ -864,6 +867,7 @@ class TestFromDictDefaultParity:
         # Core execution fields that were previously mismatched
         assert from_empty.execution_mode == default.execution_mode
         assert from_empty.execution_price == default.execution_price
+        assert from_empty.mark_price == default.mark_price
         assert from_empty.rebalance_mode == default.rebalance_mode
 
         # Verify all enum fields match

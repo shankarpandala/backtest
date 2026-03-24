@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 
 import polars as pl
 import pytest
-from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import BacktestConfig, DataFeed
 from ml4t.backtest.config import DataFrequency
+from ml4t.data.artifacts.market_data import FeedSpec
 
 
 class TestDataFeedMemoryEfficiency:
@@ -448,6 +448,8 @@ class TestDataFeedContracts:
 
         _ts, data, _ctx = next(iter(feed))
         assert data["ES"]["close"] == 4502.0
+        assert data["ES"]["price"] == 4502.0
+        assert feed._price_col == "last_price"
         assert feed.feed_spec.close_col == "last_price"
 
     def test_explicit_kwargs_override_feed_spec(self):
@@ -468,6 +470,67 @@ class TestDataFeedContracts:
 
         _ts, data, _ctx = next(iter(feed))
         assert data["AAPL"]["close"] == 101.0
+
+    def test_feed_spec_price_col_drives_reference_price(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["AAPL"],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [99.0],
+                "close": [100.5],
+                "mid_price": [100.25],
+                "volume": [1_000_000],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(price_col="mid_price"),
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["AAPL"]["price"] == 100.25
+        assert data._prices["AAPL"] == 100.25
+        assert data._closes["AAPL"] == 100.5
+
+    def test_quote_columns_are_cached_when_present(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["ES"],
+                "open": [4500.0],
+                "high": [4510.0],
+                "low": [4495.0],
+                "close": [4502.0],
+                "volume": [1250.0],
+                "bid_px": [4501.75],
+                "ask_px": [4502.25],
+                "bid_qty": [7.0],
+                "ask_qty": [11.0],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(
+                bid_col="bid_px",
+                ask_col="ask_px",
+                bid_size_col="bid_qty",
+                ask_size_col="ask_qty",
+            ),
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["ES"]["bid"] == 4501.75
+        assert data["ES"]["ask"] == 4502.25
+        assert data["ES"]["mid"] == pytest.approx(4502.0)
+        assert data["ES"]["bid_size"] == 7.0
+        assert data["ES"]["ask_size"] == 11.0
+        assert data._bids["ES"] == 4501.75
+        assert data._asks["ES"] == 4502.25
+        assert data._mids["ES"] == pytest.approx(4502.0)
 
     def test_feed_spec_and_contract_are_mutually_exclusive(self):
         prices = pl.DataFrame(

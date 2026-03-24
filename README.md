@@ -21,9 +21,11 @@ Backtesting requires accurate simulation of order execution, position tracking, 
 - Event-driven architecture with point-in-time correctness (no look-ahead bias)
 - Exit-first order processing matching real broker behavior
 - Configurable execution modes (same-bar or next-bar fills)
+- Quote-aware execution and marking with `price`, bid, ask, midpoint, and side-aware sources
 - Position-level risk rules (stop-loss, take-profit, trailing stops)
 - Portfolio-level constraints (max positions, drawdown limits)
 - Cash, margin, and crypto account policies
+- First-class trade, fill, and portfolio-state export for audit and downstream analysis
 - 40+ behavioral knobs for framework-specific parity
 
 The same Strategy class used in backtesting works unchanged in ml4t-live for production deployment.
@@ -46,7 +48,7 @@ class SignalStrategy(Strategy):
     def on_data(self, timestamp, data, context, broker):
         for asset, bar in data.items():
             signal = bar.get("signals", {}).get("prediction", 0)
-            price = bar.get("close", 0)
+            price = bar.get("price", bar.get("close", 0))
             position = broker.get_position(asset)
 
             if position is None and signal > 0.5:
@@ -68,7 +70,10 @@ result = engine.run()
 
 print(f"Total Return: {result.metrics['total_return_pct']:.2f}%")
 print(f"Sharpe Ratio: {result.metrics['sharpe']:.2f}")
+print(result.to_fills_dataframe().head())
 ```
+
+`bar["price"]` follows `FeedSpec.price_col` when you provide one, so the same strategy works for close-based bars and quote-aware feeds.
 
 ## Risk Management
 
@@ -134,6 +139,35 @@ config = BacktestConfig(
     stop_fill_mode=StopFillMode.STOP_PRICE,
 )
 ```
+
+## Quote-Aware Execution
+
+```python
+from ml4t.backtest import BacktestConfig, DataFeed
+from ml4t.backtest.config import ExecutionPrice
+
+feed = DataFeed(
+    prices_df=quotes,
+    price_col="mid_price",
+    bid_col="bid",
+    ask_col="ask",
+    bid_size_col="bid_size",
+    ask_size_col="ask_size",
+)
+
+config = BacktestConfig(
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_SIDE,
+)
+```
+
+With `QUOTE_SIDE`, buys fill at the ask and sells fill at the bid when quotes are present. `mark_price` is configured separately, so you can trade on one source and mark the book on another.
+
+Quote-aware runs also preserve the microstructure context in the result surface:
+
+- `result.to_fills_dataframe()` includes bid/ask/midpoint/spread/size context
+- `result.to_trades_dataframe()` includes nullable entry/exit quote summaries
+- `result.to_portfolio_state_dataframe()` reflects the configured mark source over time
 
 ## Commission and Slippage
 
@@ -234,12 +268,14 @@ Benchmark on 250 assets x 20 years daily data (1.26M bars):
 ## Documentation
 
 - [Getting Started](docs/getting-started/quickstart.md) — your first backtest
+- [Data Feed](docs/user-guide/data-feed.md) — `price_col`, quote columns, and feed wiring
 - [Strategies](docs/user-guide/strategies.md) — strategy interface and templates
 - [Stateful Strategies](docs/user-guide/stateful-strategies.md) — advanced event-driven patterns (Kelly sizing, pairs trading, circuit breakers)
 - [Execution Semantics](docs/user-guide/execution-semantics.md) — fill timing, ordering, stops
 - [Configuration](docs/user-guide/configuration.md) — 40+ behavioral knobs
 - [Risk Management](docs/user-guide/risk-management.md) — stops, trails, portfolio limits
 - [Rebalancing](docs/user-guide/rebalancing.md) — weight-based portfolio management
+- [Results & Analysis](docs/user-guide/results.md) — trades, fills, equity, and Parquet export
 - [Market Impact](docs/user-guide/market-impact.md) — commission, slippage, and impact models
 - [Profiles](docs/user-guide/profiles.md) — framework parity presets
 
@@ -248,7 +284,8 @@ Benchmark on 250 assets x 20 years daily data (1.26M bars):
 - **Event-driven**: Each bar processes sequentially with exit-first logic
 - **Point-in-time**: No access to future data within strategy callbacks
 - **Configurable fills**: Match behavior of different backtesting frameworks
-- **Parquet export**: Results serializable for analysis with ml4t-diagnostic
+- **Quote-aware**: Optional bid/ask/mid/size caches with side-aware market fills
+- **Parquet export**: Trades, fills, equity, daily P&L, and config are serializable
 - **Type-safe**: 0 type diagnostics (ty/Astral), full type annotations
 
 ## Related Libraries

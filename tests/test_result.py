@@ -35,7 +35,7 @@ def sample_trades() -> list[Trade]:
             pnl_percent=3.33,
             bars_held=24,
             fees=10.0,
-            slippage=5.0,
+            exit_slippage=5.0,
             exit_reason="signal",
             mfe=4.0,
             mae=-1.0,
@@ -51,7 +51,7 @@ def sample_trades() -> list[Trade]:
             pnl_percent=1.67,
             bars_held=36,
             fees=8.0,
-            slippage=3.0,
+            exit_slippage=3.0,
             exit_reason="stop_loss",
             mfe=2.5,
             mae=-0.5,
@@ -85,6 +85,7 @@ def sample_fills() -> list[Fill]:
             timestamp=base_time,
             quantity=100.0,
             price=150.0,
+            rebalance_id="rebalance-1",
             commission=5.0,
             slippage=2.5,
         ),
@@ -95,9 +96,24 @@ def sample_fills() -> list[Fill]:
             timestamp=base_time + timedelta(hours=2),
             quantity=100.0,
             price=155.0,
+            rebalance_id="rebalance-1",
             commission=5.0,
             slippage=2.5,
         ),
+    ]
+
+
+@pytest.fixture
+def sample_portfolio_state() -> list[tuple[datetime, float, float, float, float, int]]:
+    """Create sample portfolio state snapshots for testing."""
+    base_time = datetime(2024, 1, 1, 10, 0)
+    return [
+        (base_time, 100000.0, 85000.0, 15000.0, 15000.0, 1),
+        (base_time + timedelta(hours=1), 100100.0, 85000.0, 15100.0, 15100.0, 1),
+        (base_time + timedelta(hours=2), 100500.0, 100500.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=3), 100400.0, 100400.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=4), 100800.0, 100800.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=5), 100750.0, 100750.0, 0.0, 0.0, 0),
     ]
 
 
@@ -106,12 +122,14 @@ def backtest_result(
     sample_trades: list[Trade],
     sample_equity_curve: list[tuple[datetime, float]],
     sample_fills: list[Fill],
+    sample_portfolio_state: list[tuple[datetime, float, float, float, float, int]],
 ) -> BacktestResult:
     """Create BacktestResult for testing."""
     return BacktestResult(
         trades=sample_trades,
         equity_curve=sample_equity_curve,
         fills=sample_fills,
+        portfolio_state=sample_portfolio_state,
         metrics={
             "final_value": 100750.0,
             "total_return_pct": 0.75,
@@ -142,11 +160,21 @@ class TestBacktestResultTradesDataFrame:
             "pnl_percent",
             "bars_held",
             "fees",
-            "slippage",
+            "exit_slippage",
             "mfe",
             "mae",
             "entry_slippage",
             "multiplier",
+            "entry_quote_mid_price",
+            "entry_bid_price",
+            "entry_ask_price",
+            "entry_spread",
+            "entry_available_size",
+            "exit_quote_mid_price",
+            "exit_bid_price",
+            "exit_ask_price",
+            "exit_spread",
+            "exit_available_size",
             "gross_pnl",
             "net_return",
             "total_slippage_cost",
@@ -252,6 +280,90 @@ class TestBacktestResultEquityDataFrame:
         """Test DataFrame is cached on repeated calls."""
         df1 = backtest_result.to_equity_dataframe()
         df2 = backtest_result.to_equity_dataframe()
+
+        assert df1 is df2
+
+
+class TestBacktestResultFillsDataFrame:
+    """Tests for to_fills_dataframe()."""
+
+    def test_fills_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_fills_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 2
+        assert df.columns == [
+            "order_id",
+            "rebalance_id",
+            "asset",
+            "side",
+            "quantity",
+            "price",
+            "timestamp",
+            "commission",
+            "slippage",
+            "order_type",
+            "limit_price",
+            "stop_price",
+            "price_source",
+            "reference_price",
+            "quote_mid_price",
+            "bid_price",
+            "ask_price",
+            "spread",
+            "bid_size",
+            "ask_size",
+            "available_size",
+        ]
+        assert df["rebalance_id"].to_list() == ["rebalance-1", "rebalance-1"]
+
+    def test_fills_dataframe_empty(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_fills_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 0
+        assert "order_id" in df.columns
+
+
+class TestBacktestResultPortfolioStateDataFrame:
+    """Tests for to_portfolio_state_dataframe()."""
+
+    def test_portfolio_state_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_portfolio_state_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 6
+        assert df.columns == [
+            "timestamp",
+            "equity",
+            "cash",
+            "gross_exposure",
+            "net_exposure",
+            "open_positions",
+        ]
+
+    def test_portfolio_state_dataframe_values(self, backtest_result: BacktestResult):
+        df = backtest_result.to_portfolio_state_dataframe()
+
+        assert df["equity"][0] == 100000.0
+        assert df["cash"][0] == 85000.0
+        assert df["gross_exposure"][0] == 15000.0
+        assert df["net_exposure"][2] == 0.0
+        assert df["open_positions"][0] == 1
+        assert df["open_positions"][2] == 0
+
+    def test_portfolio_state_dataframe_empty(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_portfolio_state_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 0
+        assert "gross_exposure" in df.columns
+
+    def test_portfolio_state_dataframe_caching(self, backtest_result: BacktestResult):
+        df1 = backtest_result.to_portfolio_state_dataframe()
+        df2 = backtest_result.to_portfolio_state_dataframe()
 
         assert df1 is df2
 
@@ -374,6 +486,7 @@ class TestBacktestResultDict:
         assert "trades" in d
         assert "equity_curve" in d
         assert "fills" in d
+        assert "portfolio_state" in d
         assert "sharpe" in d
 
     def test_repr(self, backtest_result: BacktestResult):
@@ -414,12 +527,16 @@ class TestBacktestResultParquet:
             written = backtest_result.to_parquet(path)
 
             assert "trades" in written
+            assert "fills" in written
             assert "equity" in written
+            assert "portfolio_state" in written
             assert "daily_pnl" in written
             assert "metrics" in written
 
             assert written["trades"].exists()
+            assert written["fills"].exists()
             assert written["equity"].exists()
+            assert written["portfolio_state"].exists()
             assert written["metrics"].exists()
 
     def test_to_parquet_selective(self, backtest_result: BacktestResult):
@@ -430,7 +547,9 @@ class TestBacktestResultParquet:
 
             assert "trades" in written
             assert "metrics" in written
+            assert "fills" not in written
             assert "equity" not in written
+            assert "portfolio_state" not in written
 
     def test_to_parquet_config_write_failure_is_non_fatal(self):
         """Test config export failure is swallowed (ImportError/AttributeError path)."""
@@ -460,7 +579,10 @@ class TestBacktestResultParquet:
             loaded = BacktestResult.from_parquet(path)
 
             assert len(loaded.trades) == len(backtest_result.trades)
+            assert len(loaded.fills) == len(backtest_result.fills)
             assert len(loaded.equity_curve) == len(backtest_result.equity_curve)
+            assert len(loaded.portfolio_state) == len(backtest_result.portfolio_state)
+            assert loaded.fills[0].rebalance_id == "rebalance-1"
             assert loaded.metrics["sharpe"] == backtest_result.metrics["sharpe"]
 
     def test_to_parquet_compression(self, backtest_result: BacktestResult):

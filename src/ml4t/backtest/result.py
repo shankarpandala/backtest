@@ -32,7 +32,7 @@ import polars as pl
 from ml4t.data.artifacts.market_data import FeedSpec
 
 from .analytics.annualization import should_session_align
-from .types import Fill, Trade
+from .types import Fill, OrderSide, Trade
 
 if TYPE_CHECKING:
     from .analytics import EquityCurve, TradeAnalyzer
@@ -66,10 +66,15 @@ class BacktestResult:
     config: BacktestConfig | None = None
     equity: EquityCurve | None = None
     trade_analyzer: TradeAnalyzer | None = None
+    portfolio_state: list[tuple[datetime, float, float, float, float, int]] = field(
+        default_factory=list
+    )
 
     # Cached DataFrames (computed on demand)
     _trades_df: pl.DataFrame | None = field(default=None, repr=False)
     _equity_df: pl.DataFrame | None = field(default=None, repr=False)
+    _fills_df: pl.DataFrame | None = field(default=None, repr=False)
+    _portfolio_state_df: pl.DataFrame | None = field(default=None, repr=False)
 
     def _feed_spec(self) -> FeedSpec | None:
         if self.config is None:
@@ -91,7 +96,7 @@ class BacktestResult:
         Returns DataFrame with columns:
             symbol, entry_time, exit_time, entry_price, exit_price,
             quantity, direction, pnl, pnl_percent, bars_held,
-            fees, slippage, mfe, mae, entry_slippage, multiplier,
+            fees, exit_slippage, mfe, mae, entry_slippage, multiplier,
             gross_pnl, net_return, total_slippage_cost, cost_drag,
             exit_reason, status
 
@@ -128,11 +133,21 @@ class BacktestResult:
                     "pnl_percent": t.pnl_percent,
                     "bars_held": t.bars_held,
                     "fees": t.fees,
-                    "slippage": t.slippage,
+                    "exit_slippage": t.exit_slippage,
                     "mfe": t.mfe,
                     "mae": t.mae,
                     "entry_slippage": t.entry_slippage,
                     "multiplier": t.multiplier,
+                    "entry_quote_mid_price": t.entry_quote_mid_price,
+                    "entry_bid_price": t.entry_bid_price,
+                    "entry_ask_price": t.entry_ask_price,
+                    "entry_spread": t.entry_spread,
+                    "entry_available_size": t.entry_available_size,
+                    "exit_quote_mid_price": t.exit_quote_mid_price,
+                    "exit_bid_price": t.exit_bid_price,
+                    "exit_ask_price": t.exit_ask_price,
+                    "exit_spread": t.exit_spread,
+                    "exit_available_size": t.exit_available_size,
                     "gross_pnl": t.gross_pnl,
                     "net_return": t.net_return,
                     "total_slippage_cost": t.total_slippage_cost,
@@ -144,6 +159,45 @@ class BacktestResult:
 
         self._trades_df = pl.DataFrame(records, schema=self._trades_schema())
         return self._trades_df
+
+    def to_fills_dataframe(self) -> pl.DataFrame:
+        """Convert fills to Polars DataFrame."""
+        if self._fills_df is not None:
+            return self._fills_df
+
+        if not self.fills:
+            return pl.DataFrame(schema=self._fills_schema())
+
+        records = []
+        for fill in self.fills:
+            records.append(
+                {
+                    "order_id": fill.order_id,
+                    "rebalance_id": fill.rebalance_id,
+                    "asset": fill.asset,
+                    "side": fill.side.value,
+                    "quantity": fill.quantity,
+                    "price": fill.price,
+                    "timestamp": fill.timestamp,
+                    "commission": fill.commission,
+                    "slippage": fill.slippage,
+                    "order_type": fill.order_type,
+                    "limit_price": fill.limit_price,
+                    "stop_price": fill.stop_price,
+                    "price_source": fill.price_source,
+                    "reference_price": fill.reference_price,
+                    "quote_mid_price": fill.quote_mid_price,
+                    "bid_price": fill.bid_price,
+                    "ask_price": fill.ask_price,
+                    "spread": fill.spread,
+                    "bid_size": fill.bid_size,
+                    "ask_size": fill.ask_size,
+                    "available_size": fill.available_size,
+                }
+            )
+
+        self._fills_df = pl.DataFrame(records, schema=self._fills_schema())
+        return self._fills_df
 
     def to_equity_dataframe(self) -> pl.DataFrame:
         """Convert equity curve to Polars DataFrame.
@@ -191,6 +245,39 @@ class BacktestResult:
         )
 
         return self._equity_df
+
+    def to_portfolio_state_dataframe(self) -> pl.DataFrame:
+        """Convert portfolio state snapshots to Polars DataFrame.
+
+        Returns DataFrame with columns:
+            timestamp, equity, cash, gross_exposure, net_exposure, open_positions
+
+        Returns:
+            Polars DataFrame with one row per bar, sorted by timestamp
+        """
+        if self._portfolio_state_df is not None:
+            return self._portfolio_state_df
+
+        if not self.portfolio_state:
+            return pl.DataFrame(schema=self._portfolio_state_schema())
+
+        self._portfolio_state_df = (
+            pl.DataFrame(
+                self.portfolio_state,
+                schema=[
+                    "timestamp",
+                    "equity",
+                    "cash",
+                    "gross_exposure",
+                    "net_exposure",
+                    "open_positions",
+                ],
+                orient="row",
+            )
+            .sort("timestamp")
+            .cast(self._portfolio_state_schema())
+        )
+        return self._portfolio_state_df
 
     def to_daily_pnl(self, session_aligned: bool = False) -> pl.DataFrame:
         """Get daily P&L DataFrame.
@@ -358,6 +445,7 @@ class BacktestResult:
                 "trades": self.trades,
                 "equity_curve": self.equity_curve,
                 "fills": self.fills,
+                "portfolio_state": self.portfolio_state,
             }
         )
         if self.equity is not None:
@@ -390,7 +478,9 @@ class BacktestResult:
         Creates directory structure:
             {path}/
                 trades.parquet
+                fills.parquet
                 equity.parquet
+                portfolio_state.parquet
                 daily_pnl.parquet
                 metrics.json
                 config.yaml (if config available)
@@ -398,7 +488,8 @@ class BacktestResult:
         Args:
             path: Directory path to write files
             include: Components to include. Default: all.
-                Options: ["trades", "equity", "daily_pnl", "metrics", "config"]
+                Options: ["trades", "fills", "equity", "portfolio_state", "daily_pnl",
+                    "metrics", "config"]
             compression: Parquet compression codec (default: "zstd")
 
         Returns:
@@ -408,7 +499,15 @@ class BacktestResult:
         path.mkdir(parents=True, exist_ok=True)
 
         if include is None:
-            include = ["trades", "equity", "daily_pnl", "metrics", "config"]
+            include = [
+                "trades",
+                "fills",
+                "equity",
+                "portfolio_state",
+                "daily_pnl",
+                "metrics",
+                "config",
+            ]
 
         written: dict[str, Path] = {}
 
@@ -417,10 +516,22 @@ class BacktestResult:
             self.to_trades_dataframe().write_parquet(trades_path, compression=compression)
             written["trades"] = trades_path
 
+        if "fills" in include:
+            fills_path = path / "fills.parquet"
+            self.to_fills_dataframe().write_parquet(fills_path, compression=compression)
+            written["fills"] = fills_path
+
         if "equity" in include:
             equity_path = path / "equity.parquet"
             self.to_equity_dataframe().write_parquet(equity_path, compression=compression)
             written["equity"] = equity_path
+
+        if "portfolio_state" in include:
+            portfolio_state_path = path / "portfolio_state.parquet"
+            self.to_portfolio_state_dataframe().write_parquet(
+                portfolio_state_path, compression=compression
+            )
+            written["portfolio_state"] = portfolio_state_path
 
         if "daily_pnl" in include:
             daily_path = path / "daily_pnl.parquet"
@@ -495,12 +606,22 @@ class BacktestResult:
                         pnl_percent=row["pnl_percent"],
                         bars_held=row["bars_held"],
                         fees=fees,
-                        slippage=row["slippage"],
+                        exit_slippage=row.get("exit_slippage", row.get("slippage", 0.0)),
                         exit_reason=row.get("exit_reason", "signal"),
                         mfe=row["mfe"],
                         mae=row["mae"],
                         entry_slippage=row.get("entry_slippage", 0.0),
                         multiplier=row.get("multiplier", 1.0),
+                        entry_quote_mid_price=row.get("entry_quote_mid_price"),
+                        entry_bid_price=row.get("entry_bid_price"),
+                        entry_ask_price=row.get("entry_ask_price"),
+                        entry_spread=row.get("entry_spread"),
+                        entry_available_size=row.get("entry_available_size"),
+                        exit_quote_mid_price=row.get("exit_quote_mid_price"),
+                        exit_bid_price=row.get("exit_bid_price"),
+                        exit_ask_price=row.get("exit_ask_price"),
+                        exit_spread=row.get("exit_spread"),
+                        exit_available_size=row.get("exit_available_size"),
                     )
                 )
 
@@ -518,6 +639,53 @@ class BacktestResult:
         if metrics_path.exists():
             with open(metrics_path) as f:
                 metrics = json.load(f)
+
+        fills: list[Fill] = []
+        fills_path = path / "fills.parquet"
+        if fills_path.exists():
+            fills_df = pl.read_parquet(fills_path)
+            for row in fills_df.iter_rows(named=True):
+                fills.append(
+                    Fill(
+                        order_id=row["order_id"],
+                        rebalance_id=row.get("rebalance_id"),
+                        asset=row["asset"],
+                        side=OrderSide(row["side"]),
+                        quantity=row["quantity"],
+                        price=row["price"],
+                        timestamp=row["timestamp"],
+                        commission=row.get("commission", 0.0),
+                        slippage=row.get("slippage", 0.0),
+                        order_type=row.get("order_type", ""),
+                        limit_price=row.get("limit_price"),
+                        stop_price=row.get("stop_price"),
+                        price_source=row.get("price_source", ""),
+                        reference_price=row.get("reference_price"),
+                        quote_mid_price=row.get("quote_mid_price"),
+                        bid_price=row.get("bid_price"),
+                        ask_price=row.get("ask_price"),
+                        spread=row.get("spread"),
+                        bid_size=row.get("bid_size"),
+                        ask_size=row.get("ask_size"),
+                        available_size=row.get("available_size"),
+                    )
+                )
+
+        portfolio_state: list[tuple[datetime, float, float, float, float, int]] = []
+        portfolio_state_path = path / "portfolio_state.parquet"
+        if portfolio_state_path.exists():
+            portfolio_state_df = pl.read_parquet(portfolio_state_path)
+            for row in portfolio_state_df.iter_rows(named=True):
+                portfolio_state.append(
+                    (
+                        row["timestamp"],
+                        row["equity"],
+                        row["cash"],
+                        row["gross_exposure"],
+                        row["net_exposure"],
+                        row["open_positions"],
+                    )
+                )
 
         # Load config if available
         config = None
@@ -537,7 +705,8 @@ class BacktestResult:
         return cls(
             trades=trades,
             equity_curve=equity_curve,
-            fills=[],  # Fills not persisted by default
+            fills=fills,
+            portfolio_state=portfolio_state,
             metrics=metrics,
             config=config,
         )
@@ -565,17 +734,54 @@ class BacktestResult:
             "pnl_percent": pl.Float64(),
             "bars_held": pl.Int32(),
             "fees": pl.Float64(),
-            "slippage": pl.Float64(),
+            "exit_slippage": pl.Float64(),
             "mfe": pl.Float64(),
             "mae": pl.Float64(),
             "entry_slippage": pl.Float64(),
             "multiplier": pl.Float64(),
+            "entry_quote_mid_price": pl.Float64(),
+            "entry_bid_price": pl.Float64(),
+            "entry_ask_price": pl.Float64(),
+            "entry_spread": pl.Float64(),
+            "entry_available_size": pl.Float64(),
+            "exit_quote_mid_price": pl.Float64(),
+            "exit_bid_price": pl.Float64(),
+            "exit_ask_price": pl.Float64(),
+            "exit_spread": pl.Float64(),
+            "exit_available_size": pl.Float64(),
             "gross_pnl": pl.Float64(),
             "net_return": pl.Float64(),
             "total_slippage_cost": pl.Float64(),
             "cost_drag": pl.Float64(),
             "exit_reason": pl.String(),
             "status": pl.String(),  # "closed" or "open"
+        }
+
+    @staticmethod
+    def _fills_schema() -> dict[str, pl.DataType]:
+        """Schema for fills DataFrame."""
+        return {
+            "order_id": pl.String(),
+            "rebalance_id": pl.String(),
+            "asset": pl.String(),
+            "side": pl.String(),
+            "quantity": pl.Float64(),
+            "price": pl.Float64(),
+            "timestamp": pl.Datetime(),
+            "commission": pl.Float64(),
+            "slippage": pl.Float64(),
+            "order_type": pl.String(),
+            "limit_price": pl.Float64(),
+            "stop_price": pl.Float64(),
+            "price_source": pl.String(),
+            "reference_price": pl.Float64(),
+            "quote_mid_price": pl.Float64(),
+            "bid_price": pl.Float64(),
+            "ask_price": pl.Float64(),
+            "spread": pl.Float64(),
+            "bid_size": pl.Float64(),
+            "ask_size": pl.Float64(),
+            "available_size": pl.Float64(),
         }
 
     @staticmethod
@@ -588,6 +794,18 @@ class BacktestResult:
             "cumulative_return": pl.Float64(),
             "drawdown": pl.Float64(),
             "high_water_mark": pl.Float64(),
+        }
+
+    @staticmethod
+    def _portfolio_state_schema() -> dict[str, pl.DataType]:
+        """Schema for portfolio state DataFrame."""
+        return {
+            "timestamp": pl.Datetime(),
+            "equity": pl.Float64(),
+            "cash": pl.Float64(),
+            "gross_exposure": pl.Float64(),
+            "net_exposure": pl.Float64(),
+            "open_positions": pl.Int32(),
         }
 
     def __repr__(self) -> str:

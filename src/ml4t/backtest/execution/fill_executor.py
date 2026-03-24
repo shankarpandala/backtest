@@ -56,6 +56,8 @@ class FillContext:
     slippage: float
     signed_qty: float  # fill_quantity with sign (positive=buy, negative=sell)
     is_partial: bool
+    price_source: str
+    quote_context: dict[str, float | None]
 
 
 class FillExecutor:
@@ -98,7 +100,7 @@ class FillExecutor:
         current_time = broker._current_time
         assert current_time is not None, "Cannot execute fill without current time"
 
-        volume = broker._current_volumes.get(order.asset)
+        available_size = broker.get_available_size(order.asset, order.side)
 
         # Get effective quantity (considering partial fills from previous bars)
         effective_quantity = broker._fill_engine.get_effective_quantity(order)
@@ -109,7 +111,11 @@ class FillExecutor:
             if order.order_id in broker._filled_this_bar:
                 return False
 
-            exec_result = broker.execution_limits.calculate(effective_quantity, volume, base_price)
+            exec_result = broker.execution_limits.calculate(
+                effective_quantity,
+                available_size,
+                base_price,
+            )
             fill_quantity = exec_result.fillable_quantity
 
             if fill_quantity <= 0:
@@ -125,19 +131,31 @@ class FillExecutor:
         # Apply market impact
         if broker.market_impact_model is not None:
             is_buy = order.side == OrderSide.BUY
-            impact = broker.market_impact_model.calculate(fill_quantity, base_price, volume, is_buy)
+            impact = broker.market_impact_model.calculate(
+                fill_quantity,
+                base_price,
+                available_size,
+                is_buy,
+            )
             base_price = base_price + impact
 
         # Calculate slippage
-        slippage = broker.slippage_model.calculate(order.asset, fill_quantity, base_price, volume)
+        slippage = broker.slippage_model.calculate(
+            order.asset,
+            fill_quantity,
+            base_price,
+            available_size,
+        )
         fill_price = base_price + slippage if order.side == OrderSide.BUY else base_price - slippage
 
         # Calculate commission
         commission = broker.commission_model.calculate(order.asset, fill_quantity, fill_price)
+        quote_context = broker.get_quote_context(order.asset, order.side)
 
         # Create fill record
         fill = Fill(
             order_id=order.order_id,
+            rebalance_id=order.rebalance_id,
             asset=order.asset,
             side=order.side,
             quantity=fill_quantity,
@@ -148,6 +166,15 @@ class FillExecutor:
             order_type=order.order_type.value,
             limit_price=order.limit_price,
             stop_price=order.stop_price,
+            price_source=broker.execution_price.value,
+            reference_price=quote_context["reference_price"],
+            quote_mid_price=quote_context["quote_mid_price"],
+            bid_price=quote_context["bid_price"],
+            ask_price=quote_context["ask_price"],
+            spread=quote_context["spread"],
+            bid_size=quote_context["bid_size"],
+            ask_size=quote_context["ask_size"],
+            available_size=quote_context["available_size"],
         )
         broker.fills.append(fill)
 
@@ -172,6 +199,8 @@ class FillExecutor:
             slippage=slippage,
             signed_qty=signed_qty,
             is_partial=is_partial,
+            price_source=broker.execution_price.value,
+            quote_context=quote_context,
         )
 
         # Update position and get actual commission (may change for flips)
@@ -253,7 +282,7 @@ class FillExecutor:
         if broker.initial_hwm_source == InitialHwmSource.BAR_HIGH:
             return broker._current_highs.get(asset, fill_price)
         elif broker.initial_hwm_source == InitialHwmSource.BAR_CLOSE:
-            return broker._current_prices.get(asset, fill_price)
+            return broker._current_closes.get(asset, broker._current_prices.get(asset, fill_price))
         else:
             return fill_price
 
@@ -276,7 +305,7 @@ class FillExecutor:
         if broker.initial_hwm_source == InitialHwmSource.BAR_HIGH:
             return broker._current_lows.get(asset, fill_price)
         elif broker.initial_hwm_source == InitialHwmSource.BAR_CLOSE:
-            return broker._current_prices.get(asset, fill_price)
+            return broker._current_closes.get(asset, broker._current_prices.get(asset, fill_price))
         else:
             return fill_price
 
@@ -299,6 +328,7 @@ class FillExecutor:
             "stop_level_basis": broker.stop_level_basis,
             "trail_hwm_source": broker.trail_hwm_source,
             "trail_stop_timing": broker.trail_stop_timing,
+            "entry_quote_context": broker.get_quote_context(order.asset, order.side),
         }
         if signal_price is not None:
             context["signal_price"] = signal_price
@@ -348,6 +378,8 @@ class FillExecutor:
         pnl = (ctx.fill_price - pos.entry_price) * old_qty * pos.multiplier - total_commission
         raw_pct = (ctx.fill_price - pos.entry_price) / pos.entry_price if pos.entry_price else 0.0
         pnl_pct = raw_pct if old_qty > 0 else -raw_pct
+        entry_quote = pos.context.get("entry_quote_context", {})
+        exit_quote = ctx.quote_context
 
         trade = Trade(
             symbol=order.asset,  # Order.asset -> Trade.symbol
@@ -360,12 +392,22 @@ class FillExecutor:
             pnl_percent=pnl_pct,
             bars_held=pos.bars_held,
             fees=total_commission,
-            slippage=ctx.slippage,
+            exit_slippage=ctx.slippage,
             exit_reason=_get_exit_reason(order),
             mfe=pos.max_favorable_excursion,
             mae=pos.max_adverse_excursion,
             entry_slippage=pos.entry_slippage,
             multiplier=pos.multiplier,
+            entry_quote_mid_price=entry_quote.get("quote_mid_price"),
+            entry_bid_price=entry_quote.get("bid_price"),
+            entry_ask_price=entry_quote.get("ask_price"),
+            entry_spread=entry_quote.get("spread"),
+            entry_available_size=entry_quote.get("available_size"),
+            exit_quote_mid_price=exit_quote.get("quote_mid_price"),
+            exit_bid_price=exit_quote.get("bid_price"),
+            exit_ask_price=exit_quote.get("ask_price"),
+            exit_spread=exit_quote.get("spread"),
+            exit_available_size=exit_quote.get("available_size"),
         )
         broker.trades.append(trade)
         del broker.positions[order.asset]
@@ -403,6 +445,8 @@ class FillExecutor:
         pnl = (ctx.fill_price - pos.entry_price) * old_qty * pos.multiplier - total_close_commission
         raw_pct = (ctx.fill_price - pos.entry_price) / pos.entry_price if pos.entry_price else 0.0
         pnl_pct = raw_pct if old_qty > 0 else -raw_pct
+        entry_quote = pos.context.get("entry_quote_context", {})
+        exit_quote = ctx.quote_context
 
         trade = Trade(
             symbol=order.asset,  # Order.asset -> Trade.symbol
@@ -415,12 +459,22 @@ class FillExecutor:
             pnl_percent=pnl_pct,
             bars_held=pos.bars_held,
             fees=total_close_commission,
-            slippage=ctx.slippage * (close_qty / ctx.fill_quantity),
+            exit_slippage=ctx.slippage * (close_qty / ctx.fill_quantity),
             exit_reason=_get_exit_reason(order),
             mfe=pos.max_favorable_excursion,
             mae=pos.max_adverse_excursion,
             entry_slippage=pos.entry_slippage,
             multiplier=pos.multiplier,
+            entry_quote_mid_price=entry_quote.get("quote_mid_price"),
+            entry_bid_price=entry_quote.get("bid_price"),
+            entry_ask_price=entry_quote.get("ask_price"),
+            entry_spread=entry_quote.get("spread"),
+            entry_available_size=entry_quote.get("available_size"),
+            exit_quote_mid_price=exit_quote.get("quote_mid_price"),
+            exit_bid_price=exit_quote.get("bid_price"),
+            exit_ask_price=exit_quote.get("ask_price"),
+            exit_spread=exit_quote.get("spread"),
+            exit_available_size=exit_quote.get("available_size"),
         )
         broker.trades.append(trade)
 
@@ -525,7 +579,8 @@ class FillExecutor:
             mark_price = (
                 current_price
                 if current_price is not None
-                else broker._current_prices.get(asset, broker_pos.entry_price)
+                else broker.get_mark_price(asset, quantity=broker_pos.quantity)
+                or broker_pos.entry_price
             )
             if account_pos is None:
                 broker.account.positions[asset] = Position(

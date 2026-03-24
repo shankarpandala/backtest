@@ -909,7 +909,7 @@ def benchmark_ml4t(
         Engine,
         Strategy,
     )
-    from ml4t.backtest.config import CommissionModel, SlippageModel
+    from ml4t.backtest.config import CommissionType, SlippageType
 
     # Select profile by execution style
     default_profile = "backtrader" if execution_mode == "next_bar" else "vectorbt"
@@ -1027,22 +1027,22 @@ def benchmark_ml4t(
         cfg.initial_cash = config.initial_cash
         cfg.allow_short_selling = True
         if no_costs:
-            cfg.commission_model = CommissionModel.NONE
+            cfg.commission_type = CommissionType.NONE
             cfg.commission_rate = 0.0
-            cfg.slippage_model = SlippageModel.NONE
+            cfg.slippage_type = SlippageType.NONE
             cfg.slippage_rate = 0.0
         else:
             if config.commission_pct > 0:
-                cfg.commission_model = CommissionModel.PERCENTAGE
+                cfg.commission_type = CommissionType.PERCENTAGE
                 cfg.commission_rate = config.commission_pct
             else:
-                cfg.commission_model = CommissionModel.NONE
+                cfg.commission_type = CommissionType.NONE
                 cfg.commission_rate = 0.0
             if config.slippage_pct > 0:
-                cfg.slippage_model = SlippageModel.PERCENTAGE
+                cfg.slippage_type = SlippageType.PERCENTAGE
                 cfg.slippage_rate = config.slippage_pct
             else:
-                cfg.slippage_model = SlippageModel.NONE
+                cfg.slippage_type = SlippageType.NONE
                 cfg.slippage_rate = 0.0
         return cfg
 

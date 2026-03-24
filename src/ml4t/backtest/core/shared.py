@@ -20,6 +20,7 @@ class SubmitOrderOptions:
     """Internal options for submit_order behavior."""
 
     eligible_in_next_bar_mode: bool = False
+    rebalance_id: str | None = None
 
 
 def is_exit_order(order: Order, positions: dict[str, Position]) -> bool:

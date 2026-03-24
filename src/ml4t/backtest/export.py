@@ -129,6 +129,14 @@ class BacktestExporter:
             record["final_value"] = metrics.get("final_value", 0.0)
             record["total_commission"] = metrics.get("total_commission", 0.0)
             record["total_slippage"] = metrics.get("total_slippage", 0.0)
+            record["num_fills"] = metrics.get("num_fills", 0)
+            record["num_rebalance_events"] = metrics.get("num_rebalance_events", 0)
+            record["unique_symbols_traded"] = metrics.get("unique_symbols_traded", 0)
+            record["total_filled_notional"] = metrics.get("total_filled_notional", 0.0)
+            record["avg_turnover"] = metrics.get("avg_turnover", 0.0)
+            record["max_turnover"] = metrics.get("max_turnover", 0.0)
+            record["avg_open_positions"] = metrics.get("avg_open_positions", 0.0)
+            record["max_open_positions"] = metrics.get("max_open_positions", 0)
 
             summary_records.append(record)
 

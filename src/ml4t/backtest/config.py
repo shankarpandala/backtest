@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
 from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
@@ -36,10 +37,15 @@ from .types import ExecutionMode, StopFillMode, StopLevelBasis
 class ExecutionPrice(str, Enum):
     """Price used for order execution."""
 
+    PRICE = "price"  # Use FeedSpec.price_col / broker reference price
     CLOSE = "close"  # Use bar's close price
     OPEN = "open"  # Use bar's open price
     VWAP = "vwap"  # Volume-weighted average price (requires volume data)
     MID = "mid"  # (high + low) / 2
+    BID = "bid"  # Use best bid quote
+    ASK = "ask"  # Use best ask quote
+    QUOTE_MID = "quote_mid"  # Use quote midpoint
+    QUOTE_SIDE = "quote_side"  # Buy at ask / sell at bid
 
 
 class ShareType(str, Enum):
@@ -356,6 +362,7 @@ class BacktestConfig:
 
     # === Execution Timing ===
     execution_price: ExecutionPrice = ExecutionPrice.OPEN
+    mark_price: ExecutionPrice = ExecutionPrice.PRICE
     execution_mode: ExecutionMode = ExecutionMode.NEXT_BAR  # Order execution timing
 
     # === Stop Configuration ===
@@ -645,6 +652,7 @@ class BacktestConfig:
             },
             "execution": {
                 "execution_price": self.execution_price.value,
+                "mark_price": self.mark_price.value,
                 "execution_mode": self.execution_mode.value,
             },
             "stops": {
@@ -743,7 +751,7 @@ class BacktestConfig:
                     "fixed_margin_schedule",
                     "short_cash_policy",
                 },
-                "execution": {"execution_price", "execution_mode"},
+                "execution": {"execution_price", "mark_price", "execution_mode"},
                 "stops": {
                     "stop_fill_mode",
                     "stop_level_basis",
@@ -813,6 +821,7 @@ class BacktestConfig:
             short_cash_policy=ShortCashPolicy(acct_cfg.get("short_cash_policy", "credit")),
             # Execution
             execution_price=ExecutionPrice(exec_cfg.get("execution_price", "open")),
+            mark_price=ExecutionPrice(exec_cfg.get("mark_price", "price")),
             execution_mode=ExecutionMode(exec_cfg.get("execution_mode", "next_bar")),
             # Stops
             stop_fill_mode=StopFillMode(stops_cfg.get("stop_fill_mode", "stop_price")),
@@ -927,6 +936,7 @@ class BacktestConfig:
                 "Execution:",
                 f"  Execution mode: {self.execution_mode.value}",
                 f"  Execution price: {self.execution_price.value}",
+                f"  Mark price: {self.mark_price.value}",
                 "",
                 "Stops:",
                 f"  Fill mode: {self.stop_fill_mode.value}",

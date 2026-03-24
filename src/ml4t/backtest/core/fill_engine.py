@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ..config import ExecutionPrice, ShareType
-from ..types import ExecutionMode, OrderSide, OrderType
+from ..config import ShareType
+from ..types import OrderSide, OrderType
 
 
 class FillEngine:
@@ -96,23 +96,12 @@ class FillEngine:
 
     def get_fill_price_for_order(self, order, use_open: bool) -> float | None:
         broker = self.broker
-        if use_open and broker.execution_mode == ExecutionMode.NEXT_BAR:
-            return broker._current_opens.get(order.asset)
-        # Dispatch on execution_price setting
-        ep = broker.execution_price
-        if ep == ExecutionPrice.OPEN:
-            return broker._current_opens.get(order.asset)
-        if ep == ExecutionPrice.MID:
-            h = broker._current_highs.get(order.asset)
-            lo = broker._current_lows.get(order.asset)
-            if h is not None and lo is not None:
-                return (h + lo) / 2.0
-            return broker._current_prices.get(order.asset)
-        if ep == ExecutionPrice.VWAP:
-            # VWAP not available at bar level; fall back to close
-            return broker._current_prices.get(order.asset)
-        # Default: CLOSE
-        return broker._current_prices.get(order.asset)
+        return broker.get_price_for_source(
+            broker.execution_price,
+            order.asset,
+            side=order.side,
+            use_open=use_open,
+        )
 
     def get_effective_quantity(self, order) -> float:
         remaining = self.broker._partial_orders.get(order.order_id)

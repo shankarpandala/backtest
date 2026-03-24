@@ -53,6 +53,8 @@ config.commission_rate = 0.002
 config.initial_cash = 500_000
 ```
 
+Profiles define behavioral defaults. Quote-aware feeds layer on top of them: you can start from a preset, then override `execution_price`, `mark_price`, and the feed's `price_col` / quote columns without changing the rest of the profile.
+
 ## Profile Comparison
 
 ### Execution

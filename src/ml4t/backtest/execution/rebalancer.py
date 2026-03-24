@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ..types import Order
 
 from ..config import RebalanceMode, ShareType
+from ..core.shared import SubmitOrderOptions
 from ..types import OrderSide
 from .schedule import RebalanceSchedule, resolve_rebalance_timestamps
 
@@ -196,6 +197,13 @@ class TargetWeightExecutor:
 
         orders: list[Order] = []
         mode = self.config.rebalance_mode
+        rebalance_id: str | None = None
+
+        def rebalance_options() -> SubmitOrderOptions:
+            nonlocal rebalance_id
+            if rebalance_id is None:
+                rebalance_id = broker._next_rebalance_id()
+            return SubmitOrderOptions(rebalance_id=rebalance_id)
 
         # 2. Get current weights (effective or actual based on config)
         if self.config.account_for_pending and not self.config.cancel_before_rebalance:
@@ -225,7 +233,15 @@ class TargetWeightExecutor:
         # 5. Process reductions for target assets first (frees cash for buys).
         for asset in reducing_assets:
             target_wt = target_weights[asset]
-            order = self._process_asset(asset, target_wt, current_weights, equity, data, broker)
+            order = self._process_asset(
+                asset,
+                target_wt,
+                current_weights,
+                equity,
+                data,
+                broker,
+                rebalance_id=rebalance_options().rebalance_id,
+            )
             if order is not None:
                 orders.append(order)
             if mode in (RebalanceMode.INCREMENTAL, RebalanceMode.HYBRID) and order is not None:
@@ -239,7 +255,9 @@ class TargetWeightExecutor:
             if asset not in target_weights:
                 pos = broker.get_position(asset)
                 if pos and pos.quantity != 0:
-                    close_order: Order | None = broker.close_position(asset)
+                    close_order: Order | None = broker.close_position(
+                        asset, _options=rebalance_options()
+                    )
                     if close_order:
                         orders.append(close_order)
 
@@ -253,7 +271,15 @@ class TargetWeightExecutor:
         # 7. Process increases for target assets.
         for asset in increasing_assets:
             target_wt = target_weights[asset]
-            order = self._process_asset(asset, target_wt, current_weights, equity, data, broker)
+            order = self._process_asset(
+                asset,
+                target_wt,
+                current_weights,
+                equity,
+                data,
+                broker,
+                rebalance_id=rebalance_options().rebalance_id,
+            )
             if order is not None:
                 orders.append(order)
             if mode in (RebalanceMode.INCREMENTAL, RebalanceMode.HYBRID) and order is not None:
@@ -272,6 +298,8 @@ class TargetWeightExecutor:
         equity: float,
         data: dict[str, dict],
         broker: Broker,
+        *,
+        rebalance_id: str | None = None,
     ) -> Order | None:
         """Process a single asset for rebalancing.
 
@@ -324,7 +352,8 @@ class TargetWeightExecutor:
 
         # Submit order
         side = OrderSide.BUY if shares > 0 else OrderSide.SELL
-        return broker.submit_order(asset, abs(shares), side)
+        options = SubmitOrderOptions(rebalance_id=rebalance_id)
+        return broker.submit_order(asset, abs(shares), side, _options=options)
 
     def _get_rebalance_price(self, asset: str, data: dict[str, dict]) -> float | None:
         """Return the current bar close used for new rebalance trades."""
