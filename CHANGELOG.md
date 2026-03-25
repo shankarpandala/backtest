@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.0b11 - 2026-03-24
+
+### Added
+
+- `BacktestResult.predictions` and `BacktestResult.to_predictions_dataframe()` to preserve
+  the raw prediction or model-input DataFrame passed into the backtest.
+- `predictions.parquet` export/import support in `BacktestResult.to_parquet()` and
+  `BacktestResult.from_parquet()`.
+
+### Changed
+
+- Engine results now treat the raw `signals_df` input surface as predictions for downstream
+  diagnostics, matching `ml4t-diagnostic`'s current contract.
+- Parquet import falls back from legacy `signals.parquet` to the new predictions surface.
+- User guides and README now document the raw predictions surface for downstream analysis.
+
+### Validation
+
+- `uv run ruff check src/ml4t/backtest/result.py src/ml4t/backtest/engine.py tests/test_result.py tests/test_core.py`
+- `uv run pytest tests/test_result.py tests/test_core.py -q`
+- `uv run ty check`
+- `uv run python -m mkdocs build --strict`
+
 ## 0.1.0b10 - 2026-03-24
 
 ### Added
