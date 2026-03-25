@@ -1,20 +1,37 @@
 # Data Feed
 
-`DataFeed` converts a Polars DataFrame into per-bar data for the engine. It handles partitioning by timestamp, multi-asset iteration, and optional signals/context data.
+`DataFeed` converts a Polars DataFrame into per-bar data for the engine. It handles partitioning by timestamp, multi-asset iteration, optional signals/context data, and additive quote caches for execution-aware workloads.
 
 ## Required Columns
 
-The prices DataFrame must have these columns:
+The prices DataFrame must always include:
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `timestamp` | Datetime | Bar timestamp |
 | `asset` | String | Asset identifier |
+
+Standard OHLCV feeds usually provide:
+
+| Column | Type | Description |
+|--------|------|-------------|
 | `open` | Float | Opening price |
 | `high` | Float | High price |
 | `low` | Float | Low price |
 | `close` | Float | Closing price |
 | `volume` | Float | Trading volume |
+
+`DataFeed` also exposes a normalized `bar["price"]` field. By default it follows `close`, but if your `FeedSpec` or constructor sets `price_col`, that column becomes the broker reference price.
+
+Optional quote columns are carried through when present:
+
+| Column | Description |
+|--------|-------------|
+| `bid_col` | Best bid price |
+| `ask_col` | Best ask price |
+| `mid_col` | Explicit midpoint if your data provides one |
+| `bid_size_col` | Bid-side available size |
+| `ask_size_col` | Ask-side available size |
 
 ## Basic Usage
 
@@ -34,6 +51,33 @@ prices = pl.DataFrame({
 
 feed = DataFeed(prices_df=prices)
 ```
+
+Inside `on_data()`, each asset bar contains `price`, `open`, `high`, `low`, `close`, `volume`, plus any available quote fields and `signals`.
+
+## FeedSpec and Column Overrides
+
+Use `FeedSpec` or explicit keyword overrides when your schema differs from OHLCV defaults:
+
+```python
+from ml4t.backtest import DataFeed
+from ml4t.data.artifacts.market_data import FeedSpec
+
+feed = DataFeed(
+    prices_df=quotes,
+    feed_spec=FeedSpec(
+        timestamp_col="ts",
+        entity_col="symbol",
+        price_col="mid_price",
+        close_col="last_trade",
+        bid_col="bid",
+        ask_col="ask",
+        bid_size_col="bid_size",
+        ask_size_col="ask_size",
+    ),
+)
+```
+
+Constructor keyword arguments override `FeedSpec` fields, so you can keep a shared spec and specialize it for a single backtest.
 
 ## Multi-Asset Data
 
@@ -76,6 +120,35 @@ def on_data(self, timestamp, data, context, broker):
 ```
 
 Any column in the signals DataFrame (other than `timestamp` and `asset`) becomes a signal.
+
+## Quote-Aware Execution Inputs
+
+Quote columns are additive: you can keep OHLCV behavior unchanged, or opt into quote-aware execution in config:
+
+```python
+from ml4t.backtest import BacktestConfig
+from ml4t.backtest.config import ExecutionPrice
+
+config = BacktestConfig(
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_SIDE,
+)
+```
+
+When quotes are present:
+
+- `ExecutionPrice.PRICE` uses `FeedSpec.price_col`
+- `ExecutionPrice.BID` and `ExecutionPrice.ASK` use the best quote on that side
+- `ExecutionPrice.QUOTE_MID` uses the explicit midpoint or derives `(bid + ask) / 2`
+- `ExecutionPrice.QUOTE_SIDE` buys at ask and sells at bid
+
+If a quote field is missing, the broker falls back to the reference price or OHLC value for the configured source.
+
+Those quote inputs also flow into the reporting layer:
+
+- `result.to_fills_dataframe()` preserves fill-level quote context
+- `result.to_trades_dataframe()` preserves entry/exit quote summaries
+- `result.to_portfolio_state_dataframe()` reflects the configured mark source
 
 ## Context Data
 
@@ -137,7 +210,7 @@ result = run_backtest("data/prices.parquet", strategy, signals="data/signals.par
 
 ## Performance
 
-DataFeed pre-partitions data by timestamp at initialization and pre-extracts column indices for O(1) per-bar access. For 1M bars, this uses roughly 100 MB (10x less than converting everything to Python dicts upfront).
+DataFeed pre-partitions data by timestamp at initialization and pre-extracts column indices for O(1) per-bar access. For 1M bars, this uses roughly 100 MB (10x less than converting everything to Python dicts upfront). Quote columns are cached additively, so the legacy OHLCV path stays unchanged unless you provide quote data.
 
 ## See It in Action
 

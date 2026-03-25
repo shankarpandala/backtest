@@ -8,15 +8,18 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from statistics import mean, stdev
 from typing import TYPE_CHECKING, Any
 
 from ..config import ShareType
+from ..execution.schedule import RebalanceSchedule, resolve_rebalance_timestamps
 from ..strategy import Strategy
 
 if TYPE_CHECKING:
     from ..broker import Broker
+    from ..config import BacktestConfig
 
 
 def _use_fractional(allow_fractional: bool | None, broker: Broker) -> bool:
@@ -328,10 +331,34 @@ class LongShortStrategy(Strategy):
     short_count: int = 5
     position_size: float = 0.05
     rebalance_frequency: int = 20
+    rebalance_schedule: RebalanceSchedule | None = None
     allow_fractional: bool | None = None  # None = defer to broker.share_type
 
     def __init__(self) -> None:
         self.bar_count = 0
+        self._resolved_schedule: frozenset[datetime] | None = None
+
+    def on_prepare(
+        self,
+        broker: Any,
+        timestamps: Sequence[datetime],
+        config: BacktestConfig | None = None,
+    ) -> None:
+        """Resolve optional schedule-based rebalance gating before the run starts."""
+        if self.rebalance_schedule is None:
+            self._resolved_schedule = None
+            return
+        calendar = config.resolved_calendar if config is not None else None
+        timezone = config.resolved_timezone if config is not None else "UTC"
+        feed_spec = config.resolved_feed_spec if config is not None else None
+        resolved = resolve_rebalance_timestamps(
+            timestamps,
+            self.rebalance_schedule,
+            feed_spec=feed_spec,
+            calendar=calendar,
+            timezone=timezone,
+        )
+        self._resolved_schedule = frozenset(resolved.to_list())
 
     def rank_assets(self, data: dict[str, dict]) -> tuple[list[str], list[str]]:
         """Rank assets by signal and return long/short lists.
@@ -375,8 +402,12 @@ class LongShortStrategy(Strategy):
         """Rebalance portfolio periodically based on rankings."""
         self.bar_count += 1
 
-        # Only rebalance on schedule
-        if self.bar_count % self.rebalance_frequency != 1:
+        if self.rebalance_schedule is not None:
+            if self._resolved_schedule is None:
+                raise ValueError("rebalance_schedule is set but was not prepared before execution")
+            if timestamp not in self._resolved_schedule:
+                return
+        elif self.bar_count % self.rebalance_frequency != 1:
             return
 
         # Get current rankings

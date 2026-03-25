@@ -9,11 +9,26 @@ from typing import Any
 
 import polars as pl
 
+from ml4t.data.artifacts.market_data import FeedSpec
+
 
 class _AssetsData(dict[str, dict[str, Any]]):
     """Internal per-bar payload with pre-extracted broker views."""
 
-    __slots__ = ("_prices", "_opens", "_highs", "_lows", "_volumes", "_signals")
+    __slots__ = (
+        "_prices",
+        "_opens",
+        "_highs",
+        "_lows",
+        "_closes",
+        "_volumes",
+        "_bids",
+        "_asks",
+        "_mids",
+        "_bid_sizes",
+        "_ask_sizes",
+        "_signals",
+    )
 
     def __init__(self):
         super().__init__()
@@ -21,7 +36,13 @@ class _AssetsData(dict[str, dict[str, Any]]):
         self._opens: dict[str, Any] = {}
         self._highs: dict[str, Any] = {}
         self._lows: dict[str, Any] = {}
+        self._closes: dict[str, Any] = {}
         self._volumes: dict[str, Any] = {}
+        self._bids: dict[str, Any] = {}
+        self._asks: dict[str, Any] = {}
+        self._mids: dict[str, Any] = {}
+        self._bid_sizes: dict[str, Any] = {}
+        self._ask_sizes: dict[str, Any] = {}
         self._signals: dict[str, dict[str, Any]] = {}
 
 
@@ -56,8 +77,25 @@ class DataFeed:
         signals_df: pl.DataFrame | None = None,
         context_df: pl.DataFrame | None = None,
         *,
+        feed_spec: FeedSpec | Any | None = None,
+        contract: FeedSpec | Any | None = None,
         entity_col: str | None = None,
+        timestamp_col: str | None = None,
+        price_col: str | None = None,
+        open_col: str | None = None,
+        high_col: str | None = None,
+        low_col: str | None = None,
+        close_col: str | None = None,
+        volume_col: str | None = None,
+        bid_col: str | None = None,
+        ask_col: str | None = None,
+        mid_col: str | None = None,
+        bid_size_col: str | None = None,
+        ask_size_col: str | None = None,
     ):
+        if feed_spec is not None and contract is not None:
+            raise ValueError("Pass either feed_spec or contract, not both")
+
         self.prices = (
             prices_df
             if prices_df is not None
@@ -77,8 +115,36 @@ class DataFeed:
         if self.prices is None:
             raise ValueError("prices_path or prices_df required")
 
-        # Resolve entity column name
-        self._entity_col = self._resolve_entity_col(entity_col, self.prices.columns)
+        raw_spec = FeedSpec.from_any(feed_spec if feed_spec is not None else contract)
+        self.feed_spec = raw_spec.with_overrides(
+            entity_col=entity_col,
+            timestamp_col=timestamp_col,
+            price_col=price_col,
+            open_col=open_col,
+            high_col=high_col,
+            low_col=low_col,
+            close_col=close_col,
+            volume_col=volume_col,
+            bid_col=bid_col,
+            ask_col=ask_col,
+            mid_col=mid_col,
+            bid_size_col=bid_size_col,
+            ask_size_col=ask_size_col,
+        ).resolve(self.prices.columns, self.ENTITY_COL_CANDIDATES)
+        self.contract = self.feed_spec
+        self._timestamp_col = self.feed_spec.timestamp_col
+        self._entity_col = self.feed_spec.entity_col
+        self._price_col = self.feed_spec.price_col
+        self._open_col = self.feed_spec.open_col
+        self._high_col = self.feed_spec.high_col
+        self._low_col = self.feed_spec.low_col
+        self._close_col = self.feed_spec.close_col
+        self._volume_col = self.feed_spec.volume_col
+        self._bid_col = self.feed_spec.bid_col
+        self._ask_col = self.feed_spec.ask_col
+        self._mid_col = self.feed_spec.mid_col
+        self._bid_size_col = self.feed_spec.bid_size_col
+        self._ask_size_col = self.feed_spec.ask_size_col
 
         # Pre-partition data by timestamp for O(1) lookups
         # Store DataFrames (memory efficient) instead of dicts (memory explosion)
@@ -93,26 +159,52 @@ class DataFeed:
         self._timestamps = self._get_timestamps()
         self._idx = 0
         self._signal_columns = (
-            [c for c in self.signals.columns if c not in ("timestamp", self._entity_col)]
+            [c for c in self.signals.columns if c not in (self._timestamp_col, self._entity_col)]
             if self.signals is not None
             else []
         )
         self._context_columns = (
-            [c for c in self.context.columns if c != "timestamp"]
+            [c for c in self.context.columns if c != self._timestamp_col]
             if self.context is not None
             else []
         )
 
         price_cols = self.prices.columns
         self._price_asset_idx = price_cols.index(self._entity_col)
-        self._price_open_idx = price_cols.index("open") if "open" in price_cols else -1
-        self._price_high_idx = price_cols.index("high") if "high" in price_cols else -1
-        self._price_low_idx = price_cols.index("low") if "low" in price_cols else -1
-        self._price_close_idx = price_cols.index("close") if "close" in price_cols else -1
-        self._price_volume_idx = price_cols.index("volume") if "volume" in price_cols else -1
+        self._price_open_idx = (
+            price_cols.index(self._open_col) if self._open_col in price_cols else -1
+        )
+        self._price_high_idx = (
+            price_cols.index(self._high_col) if self._high_col in price_cols else -1
+        )
+        self._price_low_idx = price_cols.index(self._low_col) if self._low_col in price_cols else -1
+        self._price_close_idx = (
+            price_cols.index(self._close_col) if self._close_col in price_cols else -1
+        )
+        self._price_price_idx = (
+            price_cols.index(self._price_col)
+            if self._price_col in price_cols
+            else self._price_close_idx
+        )
+        self._price_volume_idx = (
+            price_cols.index(self._volume_col) if self._volume_col in price_cols else -1
+        )
+        self._price_bid_idx = price_cols.index(self._bid_col) if self._bid_col in price_cols else -1
+        self._price_ask_idx = price_cols.index(self._ask_col) if self._ask_col in price_cols else -1
+        self._price_mid_idx = price_cols.index(self._mid_col) if self._mid_col in price_cols else -1
+        self._price_bid_size_idx = (
+            price_cols.index(self._bid_size_col) if self._bid_size_col in price_cols else -1
+        )
+        self._price_ask_size_idx = (
+            price_cols.index(self._ask_size_col) if self._ask_size_col in price_cols else -1
+        )
 
         if self.signals is not None:
             signal_cols = self.signals.columns
+            if self._timestamp_col not in signal_cols:
+                raise ValueError(
+                    f"timestamp_col={self._timestamp_col!r} not found in signal columns {signal_cols}"
+                )
             self._signal_asset_idx = signal_cols.index(self._entity_col)
             self._signal_col_indices = [signal_cols.index(c) for c in self._signal_columns]
         else:
@@ -121,6 +213,10 @@ class DataFeed:
 
         if self.context is not None:
             context_cols = self.context.columns
+            if self._timestamp_col not in context_cols:
+                raise ValueError(
+                    f"timestamp_col={self._timestamp_col!r} not found in context columns {context_cols}"
+                )
             self._context_col_indices = [context_cols.index(c) for c in self._context_columns]
         else:
             self._context_col_indices = []
@@ -134,9 +230,7 @@ class DataFeed:
         """
         if explicit is not None:
             if explicit not in columns:
-                raise ValueError(
-                    f"entity_col={explicit!r} not found in columns {columns}"
-                )
+                raise ValueError(f"entity_col={explicit!r} not found in columns {columns}")
             return explicit
         for candidate in cls.ENTITY_COL_CANDIDATES:
             if candidate in columns:
@@ -153,8 +247,12 @@ class DataFeed:
         data in columnar format (minimal memory overhead).
         """
         result: dict[datetime, pl.DataFrame] = {}
-        for ts_df in df.partition_by("timestamp", maintain_order=True):
-            ts = ts_df["timestamp"][0]
+        if self._timestamp_col not in df.columns:
+            raise ValueError(
+                f"timestamp_col={self._timestamp_col!r} not found in columns {df.columns}"
+            )
+        for ts_df in df.partition_by(self._timestamp_col, maintain_order=True):
+            ts = ts_df[self._timestamp_col][0]
             result[ts] = ts_df
         return result
 
@@ -177,6 +275,11 @@ class DataFeed:
         """Number of unique timestamps/bars."""
         return len(self._timestamps)
 
+    @property
+    def timestamps(self) -> tuple[datetime, ...]:
+        """Unique feed timestamps in iteration order."""
+        return tuple(self._timestamps)
+
     def __next__(self) -> tuple[datetime, dict[str, dict], dict[str, Any]]:
         if self._idx >= len(self._timestamps):
             raise StopIteration
@@ -191,7 +294,13 @@ class DataFeed:
         price_high_idx = self._price_high_idx
         price_low_idx = self._price_low_idx
         price_close_idx = self._price_close_idx
+        price_price_idx = self._price_price_idx
         price_volume_idx = self._price_volume_idx
+        price_bid_idx = self._price_bid_idx
+        price_ask_idx = self._price_ask_idx
+        price_mid_idx = self._price_mid_idx
+        price_bid_size_idx = self._price_bid_size_idx
+        price_ask_size_idx = self._price_ask_size_idx
 
         # Convert price DataFrame slice to dicts (lazy, only current bar)
         price_df = self._prices_by_ts.get(ts)
@@ -199,10 +308,16 @@ class DataFeed:
             for row in price_df.iter_rows(named=False):
                 asset = row[price_asset_idx]
                 close = row[price_close_idx] if price_close_idx >= 0 else None
+                price = row[price_price_idx] if price_price_idx >= 0 else close
                 open_ = row[price_open_idx] if price_open_idx >= 0 else close
                 high = row[price_high_idx] if price_high_idx >= 0 else close
                 low = row[price_low_idx] if price_low_idx >= 0 else close
                 volume = row[price_volume_idx] if price_volume_idx >= 0 else 0.0
+                bid = row[price_bid_idx] if price_bid_idx >= 0 else None
+                ask = row[price_ask_idx] if price_ask_idx >= 0 else None
+                mid = row[price_mid_idx] if price_mid_idx >= 0 else None
+                bid_size = row[price_bid_size_idx] if price_bid_size_idx >= 0 else None
+                ask_size = row[price_ask_size_idx] if price_ask_size_idx >= 0 else None
 
                 if open_ is None:
                     open_ = close
@@ -212,8 +327,13 @@ class DataFeed:
                     low = close
                 if volume is None:
                     volume = 0.0
+                if price is None:
+                    price = close
+                if mid is None and bid is not None and ask is not None:
+                    mid = (bid + ask) / 2.0
 
                 assets_data[asset] = {
+                    "price": price,
                     "open": open_,
                     "high": high,
                     "low": low,
@@ -221,12 +341,33 @@ class DataFeed:
                     "volume": volume,
                     "signals": {},
                 }
-                if close is not None:
-                    assets_data._prices[asset] = close
+                if bid is not None:
+                    assets_data[asset]["bid"] = bid
+                if ask is not None:
+                    assets_data[asset]["ask"] = ask
+                if mid is not None:
+                    assets_data[asset]["mid"] = mid
+                if bid_size is not None:
+                    assets_data[asset]["bid_size"] = bid_size
+                if ask_size is not None:
+                    assets_data[asset]["ask_size"] = ask_size
+                if price is not None:
+                    assets_data._prices[asset] = price
                 assets_data._opens[asset] = open_
                 assets_data._highs[asset] = high
                 assets_data._lows[asset] = low
+                assets_data._closes[asset] = close
                 assets_data._volumes[asset] = volume
+                if bid is not None:
+                    assets_data._bids[asset] = bid
+                if ask is not None:
+                    assets_data._asks[asset] = ask
+                if mid is not None:
+                    assets_data._mids[asset] = mid
+                if bid_size is not None:
+                    assets_data._bid_sizes[asset] = bid_size
+                if ask_size is not None:
+                    assets_data._ask_sizes[asset] = ask_size
                 assets_data._signals[asset] = assets_data[asset]["signals"]
 
         # Add signals for each asset - lazy conversion

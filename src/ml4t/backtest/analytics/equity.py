@@ -1,10 +1,14 @@
 """Equity curve tracking and analysis."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .annualization import resolve_periods_per_year
 from .metrics import (
     TRADING_DAYS_PER_YEAR,
     cagr,
@@ -15,6 +19,9 @@ from .metrics import (
     sortino_ratio,
     volatility,
 )
+
+if TYPE_CHECKING:
+    from ..config import BacktestConfig
 
 
 @dataclass
@@ -28,6 +35,7 @@ class EquityCurve:
 
     timestamps: list[datetime] = field(default_factory=list)
     values: list[float] = field(default_factory=list)
+    periods_per_year_override: float | None = None
 
     def append(self, timestamp: datetime, value: float) -> None:
         """Add a data point."""
@@ -80,7 +88,9 @@ class EquityCurve:
 
     @property
     def periods_per_year(self) -> float:
-        """Infer annualization factor from observed bar frequency."""
+        """Annualization factor, preferring configured cadence over elapsed-time inference."""
+        if self.periods_per_year_override is not None:
+            return float(self.periods_per_year_override)
         if len(self.values) < 2 or len(self.timestamps) < 2:
             return float(TRADING_DAYS_PER_YEAR)
         elapsed_seconds = (self.timestamps[-1] - self.timestamps[0]).total_seconds()
@@ -91,6 +101,16 @@ class EquityCurve:
         if not np.isfinite(inferred) or inferred <= 0:
             return float(TRADING_DAYS_PER_YEAR)
         return float(inferred)
+
+    @classmethod
+    def from_config(cls, config: BacktestConfig) -> EquityCurve:
+        """Create an equity curve with annualization metadata derived from config."""
+        feed_spec = config.resolved_feed_spec
+        periods_per_year = resolve_periods_per_year(
+            feed_spec.data_frequency,
+            calendar=feed_spec.calendar,
+        )
+        return cls(periods_per_year_override=periods_per_year)
 
     def max_drawdown_info(self) -> tuple[float, int, int]:
         """Maximum drawdown with peak/trough indices."""

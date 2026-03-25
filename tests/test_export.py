@@ -31,7 +31,7 @@ def sample_result() -> BacktestResult:
             pnl_percent=3.33,
             bars_held=24,
             fees=10.0,
-            slippage=5.0,
+            exit_slippage=5.0,
         ),
     ]
     equity_curve = [
@@ -83,7 +83,7 @@ def multiple_results() -> list[BacktestResult]:
                 pnl_percent=(i + 1) * 3.33,
                 bars_held=24,
                 fees=10.0,
-                slippage=5.0,
+                exit_slippage=5.0,
             ),
         ]
         equity_curve = [
@@ -128,7 +128,9 @@ class TestBacktestExporterParquet:
             written = BacktestExporter.to_parquet(sample_result, path)
 
             assert "trades" in written
+            assert "fills" in written
             assert "equity" in written
+            assert "portfolio_state" in written
             assert written["trades"].exists()
 
     def test_from_parquet_delegation(self, sample_result: BacktestResult):
@@ -222,6 +224,9 @@ class TestBacktestExporterBatch:
             # Check all expected metrics are present
             expected_metrics = [
                 "num_trades",
+                "num_fills",
+                "num_rebalance_events",
+                "unique_symbols_traded",
                 "total_return_pct",
                 "max_drawdown_pct",
                 "sharpe",
@@ -235,6 +240,11 @@ class TestBacktestExporterBatch:
                 "final_value",
                 "total_commission",
                 "total_slippage",
+                "total_filled_notional",
+                "avg_turnover",
+                "max_turnover",
+                "avg_open_positions",
+                "max_open_positions",
             ]
 
             for metric in expected_metrics:

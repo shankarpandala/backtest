@@ -10,7 +10,9 @@ from ml4t.backtest import (
 )
 from ml4t.backtest.config import RebalanceMode
 from ml4t.backtest.execution.rebalancer import RebalanceConfig, TargetWeightExecutor
+from ml4t.backtest.execution.schedule import RebalanceSchedule
 from ml4t.backtest.models import NoCommission, NoSlippage
+from ml4t.data.artifacts.market_data import FeedSpec
 
 
 class TestRebalanceConfig:
@@ -28,6 +30,7 @@ class TestRebalanceConfig:
         assert config.max_single_weight == 1.0
         assert config.cancel_before_rebalance is True
         assert config.account_for_pending is True
+        assert config.schedule is None
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -41,6 +44,13 @@ class TestRebalanceConfig:
         assert config.allow_fractional is True
         assert config.allow_short is True
         assert config.max_single_weight == 0.25
+
+    def test_schedule_can_be_configured(self):
+        """Test schedule-based rebalance configuration."""
+        config = RebalanceConfig(schedule=RebalanceSchedule.month_end())
+
+        assert config.schedule is not None
+        assert config.schedule.cadence.value == "month_end"
 
 
 class TestTargetWeightExecutorBasic:
@@ -76,6 +86,8 @@ class TestTargetWeightExecutorBasic:
         orders = executor.execute(target_weights, sample_data, broker)
 
         assert len(orders) == 3
+        assert {order.rebalance_id for order in orders} == {orders[0].rebalance_id}
+        assert orders[0].rebalance_id is not None
         # Check all are BUY orders
         for order in orders:
             assert order.side == OrderSide.BUY
@@ -152,6 +164,19 @@ class TestTargetWeightExecutorBasic:
         asset_orders = {o.asset: o for o in orders}
         assert "GOOG" in asset_orders
         assert asset_orders["GOOG"].side == OrderSide.SELL
+        assert len({order.rebalance_id for order in orders}) == 1
+
+    def test_rebalance_ids_change_per_execute_call(self, broker, executor, sample_data):
+        """Each logical rebalance call should get its own identifier."""
+        first_orders = executor.execute({"AAPL": 0.3}, sample_data, broker)
+        broker._process_orders()
+        second_orders = executor.execute({"AAPL": 0.5}, sample_data, broker)
+
+        assert len(first_orders) == 1
+        assert len(second_orders) == 1
+        assert first_orders[0].rebalance_id is not None
+        assert second_orders[0].rebalance_id is not None
+        assert first_orders[0].rebalance_id != second_orders[0].rebalance_id
 
 
 class TestTargetWeightExecutorThresholds:
@@ -331,6 +356,109 @@ class TestTargetWeightExecutorPendingOrders:
         effective = executor._get_effective_weights(broker, sample_data)
         assert "AAPL" in effective
         assert effective["AAPL"] > 0.2  # Should reflect pending order value
+
+
+class TestTargetWeightExecutorScheduling:
+    """Test schedule-gated execution."""
+
+    @pytest.fixture
+    def broker(self):
+        broker = Broker(
+            initial_cash=100000.0,
+            commission_model=NoCommission(),
+            slippage_model=NoSlippage(),
+        )
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 150.0},
+            {"AAPL": 1000000},
+            {},
+        )
+        return broker
+
+    @pytest.fixture
+    def sample_data(self):
+        return {"AAPL": {"close": 150.0}}
+
+    def test_unscheduled_timestamp_skips_rebalance(self, broker, sample_data):
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(
+                schedule=RebalanceSchedule.explicit_timestamps([datetime(2024, 1, 2, 9, 30)])
+            )
+        )
+        executor.prepare_schedule([datetime(2024, 1, 1, 9, 30), datetime(2024, 1, 2, 9, 30)])
+
+        orders = executor.execute(
+            {"AAPL": 0.5},
+            sample_data,
+            broker,
+            timestamp=datetime(2024, 1, 1, 9, 30),
+        )
+
+        assert orders == []
+
+    def test_scheduled_timestamp_executes_rebalance(self, broker, sample_data):
+        scheduled_ts = datetime(2024, 1, 2, 9, 30)
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(schedule=RebalanceSchedule.explicit_timestamps([scheduled_ts]))
+        )
+        executor.prepare_schedule([datetime(2024, 1, 1, 9, 30), scheduled_ts])
+
+        orders = executor.execute(
+            {"AAPL": 0.5},
+            sample_data,
+            broker,
+            timestamp=scheduled_ts,
+        )
+
+        assert len(orders) == 1
+        assert orders[0].asset == "AAPL"
+
+    def test_prepare_schedule_uses_feed_semantics_for_daily_labels(self, broker, sample_data):
+        timestamps = [
+            datetime(2024, 1, 1),
+            datetime(2024, 1, 2),
+            datetime(2024, 1, 3),
+            datetime(2024, 1, 4),
+            datetime(2024, 1, 5),
+            datetime(2024, 1, 8),
+            datetime(2024, 1, 9),
+            datetime(2024, 1, 10),
+            datetime(2024, 1, 11),
+            datetime(2024, 1, 12),
+        ]
+        executor = TargetWeightExecutor(config=RebalanceConfig(schedule=RebalanceSchedule.weekly()))
+
+        resolved = executor.prepare_schedule(
+            timestamps,
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                data_frequency="daily",
+                timestamp_semantics="session_label",
+            ),
+        )
+
+        assert resolved == frozenset({datetime(2024, 1, 5), datetime(2024, 1, 12)})
+
+    def test_execute_requires_prepare_schedule_when_schedule_is_configured(
+        self, broker, sample_data
+    ):
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(
+                schedule=RebalanceSchedule.explicit_timestamps([datetime(2024, 1, 2, 9, 30)])
+            )
+        )
+
+        with pytest.raises(ValueError, match="prepare_schedule"):
+            executor.execute(
+                {"AAPL": 0.5},
+                sample_data,
+                broker,
+                timestamp=datetime(2024, 1, 2, 9, 30),
+            )
 
 
 class TestTargetWeightExecutorCashTargeting:
@@ -795,9 +923,13 @@ class TestTargetWeightExecutorIntegration:
         target1 = {"AAPL": 0.3, "GOOG": 0.3, "MSFT": 0.4}
         orders1 = executor.execute(target1, data, broker)
         assert len(orders1) == 3
+        first_rebalance_id = orders1[0].rebalance_id
+        assert first_rebalance_id is not None
+        assert {order.rebalance_id for order in orders1} == {first_rebalance_id}
 
         # Process orders
         broker._process_orders()
+        assert {fill.rebalance_id for fill in broker.fills} == {first_rebalance_id}
 
         # Step 2: Rebalance to 50/50/0 (close MSFT)
         target2 = {"AAPL": 0.5, "GOOG": 0.5}
@@ -805,6 +937,9 @@ class TestTargetWeightExecutorIntegration:
 
         # Should have AAPL buy, GOOG buy, MSFT sell (close)
         assert len(orders2) >= 2
+        assert orders2[0].rebalance_id is not None
+        assert {order.rebalance_id for order in orders2} == {orders2[0].rebalance_id}
+        assert orders2[0].rebalance_id != first_rebalance_id
 
 
 class TestTargetWeightExecutorModes:

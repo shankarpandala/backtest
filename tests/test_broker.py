@@ -3,6 +3,7 @@
 from datetime import datetime
 
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest.broker import Broker
 from ml4t.backtest.models import NoCommission, NoSlippage, PercentageCommission
@@ -1141,6 +1142,8 @@ class TestBacktestConfigMethods:
         assert "commission" in result
         assert "slippage" in result
         assert "cash" in result
+        assert "feed" in result
+        assert "metadata" in result
 
     def test_from_dict_round_trip(self):
         """Test from_dict restores config."""
@@ -1151,6 +1154,41 @@ class TestBacktestConfigMethods:
         restored = BacktestConfig.from_dict(data)
         assert restored.initial_cash == 50000.0
         assert restored.commission_rate == 0.002
+
+    def test_from_dict_round_trip_preserves_feed_and_metadata(self):
+        """Test from_dict restores feed contract and passthrough metadata."""
+        from ml4t.backtest.config import BacktestConfig
+
+        original = BacktestConfig(
+            feed_spec=FeedSpec(
+                timestamp_col="time",
+                entity_col="ticker",
+                price_col="mid_price",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+            metadata={
+                "strategy_id": "topk_monthly_v1",
+                "prices_path": "/tmp/prices.parquet",
+                "notes": {"author": "test"},
+            },
+        )
+        data = original.to_dict()
+
+        restored = BacktestConfig.from_dict(data)
+
+        assert restored.feed_spec is not None
+        assert restored.resolved_feed_spec.timestamp_col == "time"
+        assert restored.resolved_feed_spec.entity_col == "ticker"
+        assert restored.resolved_feed_spec.price_col == "mid_price"
+        assert restored.resolved_calendar == "NYSE"
+        assert restored.resolved_timezone == "America/New_York"
+        assert restored.metadata == {
+            "strategy_id": "topk_monthly_v1",
+            "prices_path": "/tmp/prices.parquet",
+            "notes": {"author": "test"},
+        }
 
     def test_to_yaml_from_yaml(self, tmp_path):
         """Test YAML serialization round trip."""
@@ -2241,6 +2279,8 @@ class TestConvenienceMethods:
 
         # Should have 3 buy orders
         assert len(orders) == 3
+        assert len({order.rebalance_id for order in orders}) == 1
+        assert orders[0].rebalance_id is not None
 
         # All should be buy orders (starting from cash)
         for order in orders:
@@ -2273,6 +2313,7 @@ class TestConvenienceMethods:
         aapl_orders = [o for o in orders if o.asset == "AAPL"]
         assert len(aapl_orders) == 1
         assert aapl_orders[0].side == OrderSide.SELL
+        assert len({order.rebalance_id for order in orders}) == 1
 
 
 class TestP1PositionModification:

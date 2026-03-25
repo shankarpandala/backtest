@@ -2,6 +2,14 @@
 
 `BacktestConfig` is the single source of truth for all backtest behavior. Every behavioral difference between frameworks is a named parameter -- no subclassing or monkey-patching required.
 
+It is also the canonical serializable backtest preset:
+
+- pass a partial config as a Python `dict`, YAML, or JSON-equivalent mapping
+- let `BacktestConfig` fill in defaults
+- persist the fully resolved snapshot from the executed result
+
+This keeps the input simple while still giving you an exact replayable record of what ran.
+
 ## Creating a Config
 
 ```python
@@ -49,7 +57,27 @@ Account type is determined by the flag combination:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `execution_mode` | ExecutionMode | NEXT_BAR | When orders fill (SAME_BAR or NEXT_BAR) |
-| `execution_price` | ExecutionPrice | OPEN | Price used for market fills (OPEN, CLOSE, VWAP, MID) |
+| `execution_price` | ExecutionPrice | OPEN | Price used for market fills |
+| `mark_price` | ExecutionPrice | PRICE | Price used for open-position marking |
+
+Available `ExecutionPrice` values:
+
+| Value | Meaning |
+|-------|---------|
+| `OPEN` | Use the bar open |
+| `CLOSE` | Use the bar close |
+| `VWAP` | Use the feed reference price as a VWAP proxy |
+| `MID` | Use `(high + low) / 2` |
+| `PRICE` | Use `FeedSpec.price_col` / `bar["price"]` |
+| `BID` | Use best bid |
+| `ASK` | Use best ask |
+| `QUOTE_MID` | Use explicit or derived midpoint |
+| `QUOTE_SIDE` | Buy at ask, sell at bid; for marking, longs use bid and shorts use ask |
+
+Quote-aware settings change both execution semantics and reporting. When you use
+`BID`, `ASK`, `QUOTE_MID`, or `QUOTE_SIDE`, fills and trades preserve the
+underlying quote context and portfolio-state snapshots reflect the configured
+mark source.
 
 ### Stop Configuration
 
@@ -132,6 +160,47 @@ Account type is determined by the flag combination:
 | `data_frequency` | DataFrequency | DAILY | Data frequency (DAILY, 1m, 5m, 15m, 30m, 1h) |
 | `enforce_sessions` | bool | False | Skip bars outside trading sessions |
 
+### Feed Contract
+
+`BacktestConfig` can also carry a serialized `FeedSpec` under the top-level `feed`
+section. This lets you capture how the input data should be interpreted without
+introducing a second config object.
+
+Supported keys mirror `FeedSpec`:
+
+- `timestamp_col`
+- `entity_col`
+- `price_col`
+- `open_col`
+- `high_col`
+- `low_col`
+- `close_col`
+- `volume_col`
+- `bid_col`
+- `ask_col`
+- `mid_col`
+- `bid_size_col`
+- `ask_size_col`
+- `calendar`
+- `timezone`
+- `data_frequency`
+- `bar_type`
+- `timestamp_semantics`
+- `session_start_time`
+
+### Metadata
+
+Use the top-level `metadata` section for any user-defined provenance that the
+library does not interpret directly, for example:
+
+- strategy id or strategy name
+- paths to price or prediction inputs
+- experiment ids
+- notes
+
+`metadata` round-trips through `to_dict()`, `from_dict()`, `to_yaml()`, and
+`from_yaml()` unchanged.
+
 ## YAML Configuration
 
 Save and load configs for reproducibility:
@@ -153,6 +222,7 @@ account:
   allow_leverage: false
 execution:
   execution_price: open
+  mark_price: price
   execution_mode: next_bar
 stops:
   stop_fill_mode: stop_price
@@ -169,7 +239,35 @@ cash:
 orders:
   fill_ordering: exit_first
   reject_on_insufficient_cash: true
+feed:
+  timestamp_col: timestamp
+  entity_col: symbol
+  price_col: close
+metadata:
+  strategy_id: topk_monthly_v1
+  prices_path: /path/to/prices.parquet
 ```
+
+You can keep input specs sparse. Any omitted fields fall back to library defaults.
+After execution, `result.config.to_dict()` gives you the fully resolved config
+snapshot with defaults filled in.
+
+## Resolved Snapshot
+
+`BacktestResult` can export a richer runtime snapshot that includes the resolved
+config plus run metadata such as the realized time window:
+
+```python
+result = run_backtest(...)
+
+# Replayable config payload
+resolved_config = result.config.to_dict()
+
+# Richer runtime spec
+runtime_spec = result.to_spec_dict()
+```
+
+`runtime_spec["config"]` remains compatible with `BacktestConfig.from_dict()`.
 
 ## Validation
 
@@ -199,6 +297,7 @@ config = BacktestConfig(
     initial_cash=100_000,
     execution_mode=ExecutionMode.NEXT_BAR,
     execution_price=ExecutionPrice.OPEN,
+    mark_price=ExecutionPrice.PRICE,
     commission_type=CommissionType.PERCENTAGE,
     commission_rate=0.002,
     slippage_type=SlippageType.PERCENTAGE,
@@ -217,6 +316,8 @@ config = BacktestConfig(
     initial_cash=10_000,
     allow_short_selling=True,
     execution_mode=ExecutionMode.SAME_BAR,
+    execution_price=ExecutionPrice.CLOSE,
+    mark_price=ExecutionPrice.PRICE,
     share_type=ShareType.FRACTIONAL,
     commission_type=CommissionType.PERCENTAGE,
     commission_rate=0.001,
@@ -233,10 +334,45 @@ config = BacktestConfig(
     commission_type=CommissionType.NONE,
     slippage_type=SlippageType.NONE,
     execution_mode=ExecutionMode.SAME_BAR,
+    mark_price=ExecutionPrice.PRICE,
     share_type=ShareType.FRACTIONAL,
     skip_cash_validation=True,
 )
 ```
+
+### Quote-Aware Microstructure
+
+```python
+config = BacktestConfig(
+    execution_mode=ExecutionMode.NEXT_BAR,
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_MID,
+    commission_type=CommissionType.PERCENTAGE,
+    commission_rate=0.0005,
+    slippage_type=SlippageType.NONE,
+)
+```
+
+This configuration:
+
+- crosses the spread at execution via `QUOTE_SIDE`
+- marks inventory at midpoint
+- keeps commission separate
+- avoids layering synthetic slippage on top unless you explicitly want extra impact
+
+### Quote-Aware Equities
+
+```python
+config = BacktestConfig(
+    execution_mode=ExecutionMode.SAME_BAR,
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_SIDE,
+    commission_type=CommissionType.NONE,
+    slippage_type=SlippageType.NONE,
+)
+```
+
+Use this with a `DataFeed` whose `FeedSpec` maps `price_col`, `bid_col`, `ask_col`, and optionally quote sizes.
 
 ## See It in Action
 

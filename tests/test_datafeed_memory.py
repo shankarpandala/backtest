@@ -9,7 +9,9 @@ from datetime import datetime, timedelta
 import polars as pl
 import pytest
 
-from ml4t.backtest import DataFeed
+from ml4t.backtest import BacktestConfig, DataFeed
+from ml4t.backtest.config import DataFrequency
+from ml4t.data.artifacts.market_data import FeedSpec
 
 
 class TestDataFeedMemoryEfficiency:
@@ -365,3 +367,191 @@ class TestDataFeedEntityColumn:
         feed = DataFeed(prices_df=prices, signals_df=signals)
         _ts, data, _ctx = next(iter(feed))
         assert data["AAPL"]["signals"]["momentum"] == 0.5
+
+
+class TestDataFeedContracts:
+    """Tests for shared feed contract support."""
+
+    def test_feed_spec_mapping_supports_custom_columns(self):
+        prices = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["MSFT"],
+                "open_px": [100.0],
+                "high_px": [101.0],
+                "low_px": [99.0],
+                "last_px": [100.5],
+                "vol": [1_000_000],
+            }
+        )
+        signals = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["MSFT"],
+                "score": [0.75],
+            }
+        )
+        context = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "regime": ["risk_on"],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            signals_df=signals,
+            context_df=context,
+            feed_spec={
+                "timestamp_col": "time",
+                "entity_col": "ticker",
+                "open_col": "open_px",
+                "high_col": "high_px",
+                "low_col": "low_px",
+                "close_col": "last_px",
+                "volume_col": "vol",
+            },
+        )
+
+        ts, data, ctx = next(iter(feed))
+        assert ts == datetime(2020, 1, 1)
+        assert feed.feed_spec.timestamp_col == "time"
+        assert feed._entity_col == "ticker"
+        assert data["MSFT"]["open"] == 100.0
+        assert data["MSFT"]["close"] == 100.5
+        assert data["MSFT"]["signals"]["score"] == 0.75
+        assert ctx["regime"] == "risk_on"
+
+    def test_feed_spec_object_uses_price_col_as_close_fallback(self):
+        class EngineerLikeContract:
+            timestamp_col = "ts"
+            symbol_col = "ticker"
+            price_col = "last_price"
+            open_col = "open_price"
+            high_col = "high_price"
+            low_col = "low_price"
+            volume_col = "size"
+
+        prices = pl.DataFrame(
+            {
+                "ts": [datetime(2020, 1, 1)],
+                "ticker": ["ES"],
+                "open_price": [4500.0],
+                "high_price": [4510.0],
+                "low_price": [4495.0],
+                "last_price": [4502.0],
+                "size": [1250],
+            }
+        )
+
+        feed = DataFeed(prices_df=prices, contract=EngineerLikeContract())
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["ES"]["close"] == 4502.0
+        assert data["ES"]["price"] == 4502.0
+        assert feed._price_col == "last_price"
+        assert feed.feed_spec.close_col == "last_price"
+
+    def test_explicit_kwargs_override_feed_spec(self):
+        prices = pl.DataFrame(
+            {
+                "time": [datetime(2020, 1, 1)],
+                "ticker": ["AAPL"],
+                "close_a": [100.0],
+                "close_b": [101.0],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(timestamp_col="time", entity_col="ticker", close_col="close_a"),
+            close_col="close_b",
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["AAPL"]["close"] == 101.0
+
+    def test_feed_spec_price_col_drives_reference_price(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["AAPL"],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [99.0],
+                "close": [100.5],
+                "mid_price": [100.25],
+                "volume": [1_000_000],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(price_col="mid_price"),
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["AAPL"]["price"] == 100.25
+        assert data._prices["AAPL"] == 100.25
+        assert data._closes["AAPL"] == 100.5
+
+    def test_quote_columns_are_cached_when_present(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["ES"],
+                "open": [4500.0],
+                "high": [4510.0],
+                "low": [4495.0],
+                "close": [4502.0],
+                "volume": [1250.0],
+                "bid_px": [4501.75],
+                "ask_px": [4502.25],
+                "bid_qty": [7.0],
+                "ask_qty": [11.0],
+            }
+        )
+
+        feed = DataFeed(
+            prices_df=prices,
+            feed_spec=FeedSpec(
+                bid_col="bid_px",
+                ask_col="ask_px",
+                bid_size_col="bid_qty",
+                ask_size_col="ask_qty",
+            ),
+        )
+
+        _ts, data, _ctx = next(iter(feed))
+        assert data["ES"]["bid"] == 4501.75
+        assert data["ES"]["ask"] == 4502.25
+        assert data["ES"]["mid"] == pytest.approx(4502.0)
+        assert data["ES"]["bid_size"] == 7.0
+        assert data["ES"]["ask_size"] == 11.0
+        assert data._bids["ES"] == 4501.75
+        assert data._asks["ES"] == 4502.25
+        assert data._mids["ES"] == pytest.approx(4502.0)
+
+    def test_feed_spec_and_contract_are_mutually_exclusive(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2020, 1, 1)],
+                "asset": ["AAPL"],
+                "close": [100.0],
+            }
+        )
+
+        with pytest.raises(ValueError, match="either feed_spec or contract"):
+            DataFeed(
+                prices_df=prices,
+                feed_spec=FeedSpec(),
+                contract=FeedSpec(),
+            )
+
+    def test_weekly_and_monthly_feed_frequencies_remain_irregular(self):
+        assert BacktestConfig(
+            feed_spec=FeedSpec(data_frequency="weekly")
+        ).resolved_data_frequency == (DataFrequency.IRREGULAR)
+        assert BacktestConfig(
+            feed_spec=FeedSpec(data_frequency="monthly")
+        ).resolved_data_frequency == (DataFrequency.IRREGULAR)

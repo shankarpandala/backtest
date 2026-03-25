@@ -85,7 +85,7 @@ class TestTradeDataclass:
             pnl_percent=0.00375,  # 1441 / (2 * 4000 * 50)
             bars_held=10,
             fees=9.0,
-            slippage=50.0,
+            exit_slippage=50.0,
             exit_reason="signal",
         )
 
@@ -93,7 +93,7 @@ class TestTradeDataclass:
         assert trade.direction == "long"
         assert trade.pnl == 1441.0
         assert trade.fees == 9.0
-        assert trade.slippage == 50.0
+        assert trade.exit_slippage == 50.0
 
     def test_trade_short(self, cl_contract: ContractSpec):
         """Short trade with negative quantity."""
@@ -108,7 +108,7 @@ class TestTradeDataclass:
             pnl_percent=0.025,
             bars_held=5,
             fees=15.0,
-            slippage=85.0,
+            exit_slippage=85.0,
             exit_reason="take_profit",
         )
 

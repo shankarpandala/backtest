@@ -49,7 +49,7 @@ def to_trade_record(trade: Trade) -> dict[str, Any]:
         "pnl_percent": trade.pnl_percent,
         "bars_held": trade.bars_held,
         "fees": trade.fees,
-        "slippage": trade.slippage,
+        "exit_slippage": trade.exit_slippage,
         "exit_reason": trade.exit_reason,
         "status": trade.status,
         "mfe": trade.mfe,

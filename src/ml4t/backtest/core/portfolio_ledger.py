@@ -12,7 +12,7 @@ class PortfolioLedger:
     def get_account_value(self) -> float:
         value = self.broker.cash
         for asset, pos in self.broker.positions.items():
-            price = self.broker._current_prices.get(asset)
+            price = self.broker.get_mark_price(asset, quantity=pos.quantity)
             if price is None:
                 price = self.broker._last_prices.get(asset)
             if price is None:

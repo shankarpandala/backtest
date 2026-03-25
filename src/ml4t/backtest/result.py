@@ -8,7 +8,7 @@ Example:
     >>> engine = Engine(feed, strategy)
     >>> result = engine.run()
     >>>
-    >>> # Export trades to Parquet
+    >>> # Export trades and raw predictions to Parquet
     >>> result.to_parquet("./results/my_backtest")
     >>>
     >>> # Get DataFrames
@@ -28,59 +28,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import polars as pl
+from ml4t.data.artifacts.market_data import FeedSpec
 
-from .types import Fill, Trade
+try:
+    from ._version import __version__
+except ImportError:  # pragma: no cover - fallback for local editable edge cases
+    __version__ = "0.0.0.dev0"
+from .analytics.annualization import should_session_align
+from .types import Fill, OrderSide, Trade
 
 if TYPE_CHECKING:
     from .analytics import EquityCurve, TradeAnalyzer
     from .config import BacktestConfig
-
-
-# Annualization factors for common trading calendars
-_ANNUALIZATION_FACTORS: dict[str, int] = {
-    "crypto": 365,  # 24/7 trading
-    "NYSE": 252,
-    "NASDAQ": 252,
-    "CME_Equity": 252,
-    "CME_Agriculture": 252,
-    "CME_Globex_Energy_and_Metals": 252,
-    "LSE": 253,
-    "XETRA": 252,
-    "TSX": 252,
-    "HKEX": 252,
-    "JPX": 245,
-}
-
-
-def _get_annualization_factor(calendar: str | None) -> int:
-    """Get annualization factor for a trading calendar.
-
-    Args:
-        calendar: Trading calendar name. If None, defaults to 252.
-
-    Returns:
-        Number of trading days per year for the calendar.
-    """
-    if calendar is None:
-        return 252  # Default for equities
-
-    # Check known calendars (case-insensitive)
-    cal_upper = calendar.upper()
-    for name, factor in _ANNUALIZATION_FACTORS.items():
-        if name.upper() == cal_upper:
-            return factor
-
-    # Try pandas_market_calendars for unknown calendars
-    try:
-        from pandas_market_calendars import get_calendar
-
-        cal = get_calendar(calendar)
-        # Estimate from typical year
-        schedule = cal.schedule("2024-01-01", "2024-12-31")
-        return len(schedule)
-    except Exception:
-        # Default fallback
-        return 252
 
 
 @dataclass
@@ -97,6 +56,7 @@ class BacktestResult:
         trades: List of completed Trade objects
         equity_curve: List of (timestamp, portfolio_value) tuples
         fills: List of Fill objects (all order fills)
+        predictions: Raw prediction DataFrame passed into the backtest (optional)
         metrics: Dictionary of computed performance metrics
         config: BacktestConfig used for the backtest (optional)
         equity: EquityCurve analytics object
@@ -107,13 +67,33 @@ class BacktestResult:
     equity_curve: list[tuple[datetime, float]]
     fills: list[Fill]
     metrics: dict[str, Any]
+    predictions: pl.DataFrame | None = None
     config: BacktestConfig | None = None
     equity: EquityCurve | None = None
     trade_analyzer: TradeAnalyzer | None = None
+    portfolio_state: list[tuple[datetime, float, float, float, float, int]] = field(
+        default_factory=list
+    )
 
     # Cached DataFrames (computed on demand)
     _trades_df: pl.DataFrame | None = field(default=None, repr=False)
     _equity_df: pl.DataFrame | None = field(default=None, repr=False)
+    _fills_df: pl.DataFrame | None = field(default=None, repr=False)
+    _portfolio_state_df: pl.DataFrame | None = field(default=None, repr=False)
+
+    def _feed_spec(self) -> FeedSpec | None:
+        if self.config is None:
+            return None
+        return self.config.resolved_feed_spec
+
+    def _auto_session_aligned(self, calendar: str | None = None) -> bool:
+        timestamps = [ts for ts, _ in self.equity_curve]
+        resolved_calendar = calendar or (self.config.resolved_calendar if self.config else None)
+        return should_session_align(
+            calendar=resolved_calendar,
+            feed_spec=self._feed_spec(),
+            timestamps=timestamps,
+        )
 
     def to_trades_dataframe(self) -> pl.DataFrame:
         """Convert trades to Polars DataFrame.
@@ -121,7 +101,7 @@ class BacktestResult:
         Returns DataFrame with columns:
             symbol, entry_time, exit_time, entry_price, exit_price,
             quantity, direction, pnl, pnl_percent, bars_held,
-            fees, slippage, mfe, mae, entry_slippage, multiplier,
+            fees, exit_slippage, mfe, mae, entry_slippage, multiplier,
             gross_pnl, net_return, total_slippage_cost, cost_drag,
             exit_reason, status
 
@@ -158,11 +138,21 @@ class BacktestResult:
                     "pnl_percent": t.pnl_percent,
                     "bars_held": t.bars_held,
                     "fees": t.fees,
-                    "slippage": t.slippage,
+                    "exit_slippage": t.exit_slippage,
                     "mfe": t.mfe,
                     "mae": t.mae,
                     "entry_slippage": t.entry_slippage,
                     "multiplier": t.multiplier,
+                    "entry_quote_mid_price": t.entry_quote_mid_price,
+                    "entry_bid_price": t.entry_bid_price,
+                    "entry_ask_price": t.entry_ask_price,
+                    "entry_spread": t.entry_spread,
+                    "entry_available_size": t.entry_available_size,
+                    "exit_quote_mid_price": t.exit_quote_mid_price,
+                    "exit_bid_price": t.exit_bid_price,
+                    "exit_ask_price": t.exit_ask_price,
+                    "exit_spread": t.exit_spread,
+                    "exit_available_size": t.exit_available_size,
                     "gross_pnl": t.gross_pnl,
                     "net_return": t.net_return,
                     "total_slippage_cost": t.total_slippage_cost,
@@ -174,6 +164,51 @@ class BacktestResult:
 
         self._trades_df = pl.DataFrame(records, schema=self._trades_schema())
         return self._trades_df
+
+    def to_fills_dataframe(self) -> pl.DataFrame:
+        """Convert fills to Polars DataFrame."""
+        if self._fills_df is not None:
+            return self._fills_df
+
+        if not self.fills:
+            return pl.DataFrame(schema=self._fills_schema())
+
+        records = []
+        for fill in self.fills:
+            records.append(
+                {
+                    "order_id": fill.order_id,
+                    "rebalance_id": fill.rebalance_id,
+                    "asset": fill.asset,
+                    "side": fill.side.value,
+                    "quantity": fill.quantity,
+                    "price": fill.price,
+                    "timestamp": fill.timestamp,
+                    "commission": fill.commission,
+                    "slippage": fill.slippage,
+                    "order_type": fill.order_type,
+                    "limit_price": fill.limit_price,
+                    "stop_price": fill.stop_price,
+                    "price_source": fill.price_source,
+                    "reference_price": fill.reference_price,
+                    "quote_mid_price": fill.quote_mid_price,
+                    "bid_price": fill.bid_price,
+                    "ask_price": fill.ask_price,
+                    "spread": fill.spread,
+                    "bid_size": fill.bid_size,
+                    "ask_size": fill.ask_size,
+                    "available_size": fill.available_size,
+                }
+            )
+
+        self._fills_df = pl.DataFrame(records, schema=self._fills_schema())
+        return self._fills_df
+
+    def to_predictions_dataframe(self) -> pl.DataFrame:
+        """Return the raw prediction DataFrame used as backtest input."""
+        if self.predictions is None:
+            return pl.DataFrame()
+        return self.predictions
 
     def to_equity_dataframe(self) -> pl.DataFrame:
         """Convert equity curve to Polars DataFrame.
@@ -222,6 +257,39 @@ class BacktestResult:
 
         return self._equity_df
 
+    def to_portfolio_state_dataframe(self) -> pl.DataFrame:
+        """Convert portfolio state snapshots to Polars DataFrame.
+
+        Returns DataFrame with columns:
+            timestamp, equity, cash, gross_exposure, net_exposure, open_positions
+
+        Returns:
+            Polars DataFrame with one row per bar, sorted by timestamp
+        """
+        if self._portfolio_state_df is not None:
+            return self._portfolio_state_df
+
+        if not self.portfolio_state:
+            return pl.DataFrame(schema=self._portfolio_state_schema())
+
+        self._portfolio_state_df = (
+            pl.DataFrame(
+                self.portfolio_state,
+                schema=[
+                    "timestamp",
+                    "equity",
+                    "cash",
+                    "gross_exposure",
+                    "net_exposure",
+                    "open_positions",
+                ],
+                orient="row",
+            )
+            .sort("timestamp")
+            .cast(self._portfolio_state_schema())
+        )
+        return self._portfolio_state_df
+
     def to_daily_pnl(self, session_aligned: bool = False) -> pl.DataFrame:
         """Get daily P&L DataFrame.
 
@@ -253,14 +321,14 @@ class BacktestResult:
         # Build equity DataFrame
         equity_df = self.to_equity_dataframe()
 
-        if session_aligned and self.config and self.config.calendar:
+        if session_aligned and self.config and self.config.resolved_calendar:
             # Use session alignment
             from .sessions import SessionConfig, compute_session_pnl
 
             session_config = SessionConfig(
-                calendar=self.config.calendar,
-                timezone=self.config.timezone,
-                session_start_time=getattr(self.config, "session_start_time", None),
+                calendar=self.config.resolved_calendar,
+                timezone=self.config.resolved_timezone,
+                session_start_time=self.config.resolved_session_start_time,
             )
             return compute_session_pnl(self.equity_curve, session_config)
 
@@ -334,14 +402,13 @@ class BacktestResult:
             >>> result = engine.run()
             >>> daily_returns = result.to_daily_returns(calendar="NYSE")
             >>> # Use with ml4t-diagnostic
-            >>> from ml4t.diagnostic import sharpe_ratio
+            >>> from ml4t.diagnostic.evaluation.metrics.risk_adjusted import sharpe_ratio
             >>> sharpe = sharpe_ratio(daily_returns.to_numpy(), annualization_factor=252)
         """
         # Determine session alignment
         if session_aligned is None:
-            # Auto-detect: CME calendars typically need session alignment
-            cal = calendar or (self.config.calendar if self.config else None)
-            session_aligned = cal is not None and "CME" in str(cal).upper()
+            cal = calendar or (self.config.resolved_calendar if self.config else None)
+            session_aligned = self._auto_session_aligned(cal)
 
         # Get daily P&L DataFrame
         daily_df = self.to_daily_pnl(session_aligned=session_aligned)
@@ -377,220 +444,6 @@ class BacktestResult:
 
         return to_trade_records(self.trades)
 
-    def to_portfolio_analysis(
-        self,
-        calendar: str | None = None,
-        benchmark: Any = None,
-    ) -> Any:
-        """Create a PortfolioAnalysis with properly aligned dates.
-
-        This is the recommended bridge from backtest results to
-        ml4t-diagnostic analysis. It extracts daily returns with dates
-        and creates a PortfolioAnalysis with the correct annualization.
-
-        Args:
-            calendar: Trading calendar for annualization and session alignment.
-                - "crypto": 365 days/year (24/7)
-                - "NYSE", "NASDAQ": 252 days/year
-                - Any pandas_market_calendars calendar
-                If None, uses config calendar or defaults to 252.
-            benchmark: Optional benchmark returns (pl.Series, np.ndarray,
-                or list) for alpha/beta calculation.
-
-        Returns:
-            PortfolioAnalysis instance from ml4t.diagnostic
-
-        Raises:
-            ImportError: If ml4t-diagnostic is not installed
-
-        Example:
-            >>> result = engine.run()
-            >>> analysis = result.to_portfolio_analysis(calendar="crypto")
-            >>> stats = analysis.compute_summary_stats()
-            >>> print(f"Sharpe: {stats.sharpe_ratio:.2f}")
-        """
-        try:
-            from ml4t.diagnostic.evaluation import PortfolioAnalysis
-        except ImportError as e:
-            raise ImportError(
-                "ml4t-diagnostic is required for to_portfolio_analysis(). "
-                "Install with: pip install ml4t-diagnostic"
-            ) from e
-
-        # Determine calendar and annualization
-        cal = calendar or (self.config.calendar if self.config else None)
-        periods_per_year = _get_annualization_factor(cal)
-        session_aligned = cal is not None and "CME" in str(cal).upper()
-
-        # Extract daily returns with dates
-        daily_df = self.to_daily_pnl(session_aligned=session_aligned)
-        if daily_df.is_empty():
-            import numpy as np
-
-            return PortfolioAnalysis(
-                returns=np.array([]),
-                periods_per_year=periods_per_year,
-            )
-
-        date_col = "date" if "date" in daily_df.columns else "session_date"
-        dates = daily_df[date_col].to_list()
-        returns = daily_df["return_pct"].to_numpy()
-
-        return PortfolioAnalysis(
-            returns=returns,
-            dates=dates,
-            benchmark=benchmark,
-            periods_per_year=periods_per_year,
-        )
-
-    def compute_metrics(
-        self,
-        calendar: str | None = None,
-        confidence_intervals: bool = False,
-    ) -> dict[str, Any]:
-        """Compute performance metrics via ml4t-diagnostic.
-
-        This method provides properly computed risk-adjusted metrics using
-        daily returns. For intraday backtests, this is critical to get
-        correct Sharpe/Sortino ratios (bar-level returns give wrong values).
-
-        Args:
-            calendar: Trading calendar for annualization:
-                - "crypto": 365 days/year (24/7)
-                - "NYSE", "NASDAQ": 252 days/year
-                - Any pandas_market_calendars calendar
-                If None, uses config calendar or defaults to 252.
-            confidence_intervals: If True, include bootstrap CI for Sharpe
-                (requires ml4t-diagnostic with bootstrap support)
-
-        Returns:
-            Dictionary with metrics:
-                - sharpe_ratio: Annualized Sharpe ratio
-                - sortino_ratio: Annualized Sortino ratio
-                - calmar_ratio: CAGR / Max Drawdown
-                - max_drawdown: Maximum drawdown (negative)
-                - cagr: Compound annual growth rate
-                - total_return: Total return
-                - num_trades: Number of trades
-                - win_rate: Percentage of winning trades
-                - profit_factor: Gross profits / Gross losses
-                - expectancy: Average expected P&L per trade
-                Plus trade statistics from TradeAnalyzer
-
-        Raises:
-            ImportError: If ml4t-diagnostic is not installed
-
-        Example:
-            >>> result = engine.run()
-            >>> metrics = result.compute_metrics(calendar="crypto")
-            >>> print(f"Sharpe: {metrics['sharpe_ratio']:.2f}")
-        """
-        # Import from ml4t-diagnostic (optional dependency)
-        # Using dynamic import to avoid type checker issues with optional deps
-        import importlib
-        from collections.abc import Callable
-
-        try:
-            diagnostic = importlib.import_module("ml4t.diagnostic")
-            sharpe_ratio: Callable[..., float] = diagnostic.sharpe_ratio
-            sortino_ratio: Callable[..., float] = diagnostic.sortino_ratio
-        except (ImportError, AttributeError) as e:
-            raise ImportError(
-                "ml4t-diagnostic is required for compute_metrics(). "
-                "Install with: pip install ml4t-diagnostic"
-            ) from e
-
-        # Get calendar and annualization factor
-        cal = calendar or (self.config.calendar if self.config else None)
-        annualization_factor = _get_annualization_factor(cal)
-
-        # Get daily returns
-        daily_returns = self.to_daily_returns(calendar=cal)
-        returns_array = daily_returns.to_numpy()
-
-        # Compute metrics via diagnostic library
-        metrics: dict[str, Any] = {}
-
-        # Risk-adjusted returns
-        if len(returns_array) > 0:
-            metrics["sharpe_ratio"] = sharpe_ratio(
-                returns_array, annualization_factor=annualization_factor
-            )
-            metrics["sortino_ratio"] = sortino_ratio(
-                returns_array, annualization_factor=annualization_factor
-            )
-        else:
-            metrics["sharpe_ratio"] = 0.0
-            metrics["sortino_ratio"] = 0.0
-
-        # Drawdown metrics (from equity curve)
-        equity_df = self.to_equity_dataframe()
-        if len(equity_df) > 0:
-            # Get max drawdown as float
-            dd_values = equity_df["drawdown"].to_list()
-            max_dd: float = min(dd_values) if dd_values else 0.0
-            metrics["max_drawdown"] = max_dd
-
-            # CAGR from total return and days
-            equity_values = equity_df["equity"].to_list()
-            first_val: float = equity_values[0] if equity_values else 1.0
-            last_val: float = equity_values[-1] if equity_values else 1.0
-            total_return: float = (last_val / first_val) - 1.0
-            metrics["total_return"] = total_return
-
-            # Days in backtest
-            timestamps = equity_df["timestamp"].to_list()
-            first_ts = timestamps[0]
-            last_ts = timestamps[-1]
-            days: float = (last_ts - first_ts).total_seconds() / 86400
-            years: float = days / 365.25
-            if years > 0:
-                cagr: float = (1 + total_return) ** (1 / years) - 1
-                metrics["cagr"] = cagr
-                if max_dd != 0:
-                    metrics["calmar_ratio"] = cagr / abs(max_dd)
-                else:
-                    metrics["calmar_ratio"] = 0.0
-            else:
-                metrics["cagr"] = 0.0
-                metrics["calmar_ratio"] = 0.0
-        else:
-            metrics["max_drawdown"] = 0.0
-            metrics["total_return"] = 0.0
-            metrics["cagr"] = 0.0
-            metrics["calmar_ratio"] = 0.0
-
-        # Trade statistics
-        if self.trade_analyzer is not None:
-            ta = self.trade_analyzer
-            metrics["num_trades"] = ta.num_trades
-            metrics["win_rate"] = ta.win_rate
-            metrics["profit_factor"] = ta.profit_factor
-            metrics["expectancy"] = ta.expectancy
-            metrics["avg_trade"] = ta.avg_trade
-            metrics["avg_winner"] = ta.avg_win
-            metrics["avg_loser"] = ta.avg_loss
-            metrics["total_fees"] = ta.total_fees
-        elif self.trades:
-            # Compute basic stats
-            wins = [t for t in self.trades if t.pnl > 0]
-            losses = [t for t in self.trades if t.pnl < 0]
-            metrics["num_trades"] = len(self.trades)
-            metrics["win_rate"] = len(wins) / len(self.trades) if self.trades else 0.0
-            total_wins = sum(t.pnl for t in wins)
-            total_losses = abs(sum(t.pnl for t in losses))
-            metrics["profit_factor"] = total_wins / total_losses if total_losses > 0 else 0.0
-            metrics["avg_trade"] = sum(t.pnl for t in self.trades) / len(self.trades)
-            metrics["expectancy"] = metrics["avg_trade"]
-        else:
-            metrics["num_trades"] = 0
-            metrics["win_rate"] = 0.0
-            metrics["profit_factor"] = 0.0
-            metrics["expectancy"] = 0.0
-            metrics["avg_trade"] = 0.0
-
-        return metrics
-
     def to_dict(self) -> dict[str, Any]:
         """Export as dictionary (backward compatible with Engine.run()).
 
@@ -603,13 +456,37 @@ class BacktestResult:
                 "trades": self.trades,
                 "equity_curve": self.equity_curve,
                 "fills": self.fills,
+                "portfolio_state": self.portfolio_state,
             }
         )
+        if self.predictions is not None:
+            result["predictions"] = self.predictions
         if self.equity is not None:
             result["equity"] = self.equity
         if self.trade_analyzer is not None:
             result["trade_analyzer"] = self.trade_analyzer
         return result
+
+    def to_spec_dict(self) -> dict[str, Any]:
+        """Export a resolved runtime spec for reproducibility.
+
+        Returns:
+            Dictionary containing the fully resolved config, library version,
+            and realized run window. The nested ``config`` payload remains
+            compatible with ``BacktestConfig.from_dict()``.
+        """
+        config_dict = self.config.to_dict() if self.config is not None else {}
+        start = self.equity_curve[0][0].isoformat() if self.equity_curve else None
+        end = self.equity_curve[-1][0].isoformat() if self.equity_curve else None
+        return {
+            "version": 1,
+            "library_version": __version__,
+            "config": config_dict,
+            "window": {
+                "start": start,
+                "end": end,
+            },
+        }
 
     # Dict-like access keeps validation scripts and older notebook code working.
     def __getitem__(self, key: str) -> Any:
@@ -635,15 +512,20 @@ class BacktestResult:
         Creates directory structure:
             {path}/
                 trades.parquet
+                fills.parquet
+                predictions.parquet
                 equity.parquet
+                portfolio_state.parquet
                 daily_pnl.parquet
                 metrics.json
                 config.yaml (if config available)
+                spec.yaml (if config available)
 
         Args:
             path: Directory path to write files
             include: Components to include. Default: all.
-                Options: ["trades", "equity", "daily_pnl", "metrics", "config"]
+                Options: ["trades", "fills", "predictions", "equity", "portfolio_state", "daily_pnl",
+                    "metrics", "config"]
             compression: Parquet compression codec (default: "zstd")
 
         Returns:
@@ -653,7 +535,17 @@ class BacktestResult:
         path.mkdir(parents=True, exist_ok=True)
 
         if include is None:
-            include = ["trades", "equity", "daily_pnl", "metrics", "config"]
+            include = [
+                "trades",
+                "fills",
+                "predictions",
+                "equity",
+                "portfolio_state",
+                "daily_pnl",
+                "metrics",
+                "config",
+                "spec",
+            ]
 
         written: dict[str, Path] = {}
 
@@ -662,10 +554,27 @@ class BacktestResult:
             self.to_trades_dataframe().write_parquet(trades_path, compression=compression)
             written["trades"] = trades_path
 
+        if "fills" in include:
+            fills_path = path / "fills.parquet"
+            self.to_fills_dataframe().write_parquet(fills_path, compression=compression)
+            written["fills"] = fills_path
+
+        if "predictions" in include and self.predictions is not None:
+            predictions_path = path / "predictions.parquet"
+            self.to_predictions_dataframe().write_parquet(predictions_path, compression=compression)
+            written["predictions"] = predictions_path
+
         if "equity" in include:
             equity_path = path / "equity.parquet"
             self.to_equity_dataframe().write_parquet(equity_path, compression=compression)
             written["equity"] = equity_path
+
+        if "portfolio_state" in include:
+            portfolio_state_path = path / "portfolio_state.parquet"
+            self.to_portfolio_state_dataframe().write_parquet(
+                portfolio_state_path, compression=compression
+            )
+            written["portfolio_state"] = portfolio_state_path
 
         if "daily_pnl" in include:
             daily_path = path / "daily_pnl.parquet"
@@ -705,6 +614,17 @@ class BacktestResult:
             except (ImportError, AttributeError):
                 pass  # Skip if yaml not available or config has no to_dict
 
+        if "spec" in include and self.config is not None:
+            spec_path = path / "spec.yaml"
+            try:
+                import yaml
+
+                with open(spec_path, "w") as f:
+                    yaml.dump(self.to_spec_dict(), f, default_flow_style=False, sort_keys=False)
+                written["spec"] = spec_path
+            except (ImportError, AttributeError):
+                pass
+
         return written
 
     @classmethod
@@ -740,12 +660,22 @@ class BacktestResult:
                         pnl_percent=row["pnl_percent"],
                         bars_held=row["bars_held"],
                         fees=fees,
-                        slippage=row["slippage"],
+                        exit_slippage=row.get("exit_slippage", row.get("slippage", 0.0)),
                         exit_reason=row.get("exit_reason", "signal"),
                         mfe=row["mfe"],
                         mae=row["mae"],
                         entry_slippage=row.get("entry_slippage", 0.0),
                         multiplier=row.get("multiplier", 1.0),
+                        entry_quote_mid_price=row.get("entry_quote_mid_price"),
+                        entry_bid_price=row.get("entry_bid_price"),
+                        entry_ask_price=row.get("entry_ask_price"),
+                        entry_spread=row.get("entry_spread"),
+                        entry_available_size=row.get("entry_available_size"),
+                        exit_quote_mid_price=row.get("exit_quote_mid_price"),
+                        exit_bid_price=row.get("exit_bid_price"),
+                        exit_ask_price=row.get("exit_ask_price"),
+                        exit_spread=row.get("exit_spread"),
+                        exit_available_size=row.get("exit_available_size"),
                     )
                 )
 
@@ -764,6 +694,62 @@ class BacktestResult:
             with open(metrics_path) as f:
                 metrics = json.load(f)
 
+        fills: list[Fill] = []
+        fills_path = path / "fills.parquet"
+        if fills_path.exists():
+            fills_df = pl.read_parquet(fills_path)
+            for row in fills_df.iter_rows(named=True):
+                fills.append(
+                    Fill(
+                        order_id=row["order_id"],
+                        rebalance_id=row.get("rebalance_id"),
+                        asset=row["asset"],
+                        side=OrderSide(row["side"]),
+                        quantity=row["quantity"],
+                        price=row["price"],
+                        timestamp=row["timestamp"],
+                        commission=row.get("commission", 0.0),
+                        slippage=row.get("slippage", 0.0),
+                        order_type=row.get("order_type", ""),
+                        limit_price=row.get("limit_price"),
+                        stop_price=row.get("stop_price"),
+                        price_source=row.get("price_source", ""),
+                        reference_price=row.get("reference_price"),
+                        quote_mid_price=row.get("quote_mid_price"),
+                        bid_price=row.get("bid_price"),
+                        ask_price=row.get("ask_price"),
+                        spread=row.get("spread"),
+                        bid_size=row.get("bid_size"),
+                        ask_size=row.get("ask_size"),
+                        available_size=row.get("available_size"),
+                    )
+                )
+
+        predictions = None
+        predictions_path = path / "predictions.parquet"
+        if predictions_path.exists():
+            predictions = pl.read_parquet(predictions_path)
+        else:
+            signals_path = path / "signals.parquet"
+            if signals_path.exists():
+                predictions = pl.read_parquet(signals_path)
+
+        portfolio_state: list[tuple[datetime, float, float, float, float, int]] = []
+        portfolio_state_path = path / "portfolio_state.parquet"
+        if portfolio_state_path.exists():
+            portfolio_state_df = pl.read_parquet(portfolio_state_path)
+            for row in portfolio_state_df.iter_rows(named=True):
+                portfolio_state.append(
+                    (
+                        row["timestamp"],
+                        row["equity"],
+                        row["cash"],
+                        row["gross_exposure"],
+                        row["net_exposure"],
+                        row["open_positions"],
+                    )
+                )
+
         # Load config if available
         config = None
         config_path = path / "config.yaml"
@@ -778,11 +764,27 @@ class BacktestResult:
                 config = BacktestConfig.from_dict(config_data)
             except (ImportError, Exception):
                 pass  # Skip if yaml not available or config invalid
+        else:
+            spec_path = path / "spec.yaml"
+            if spec_path.exists():
+                try:
+                    import yaml
+
+                    from .config import BacktestConfig
+
+                    with open(spec_path) as f:
+                        spec_data = yaml.safe_load(f)
+                    if isinstance(spec_data, dict) and isinstance(spec_data.get("config"), dict):
+                        config = BacktestConfig.from_dict(spec_data["config"])
+                except (ImportError, Exception):
+                    pass
 
         return cls(
             trades=trades,
             equity_curve=equity_curve,
-            fills=[],  # Fills not persisted by default
+            fills=fills,
+            predictions=predictions,
+            portfolio_state=portfolio_state,
             metrics=metrics,
             config=config,
         )
@@ -810,17 +812,54 @@ class BacktestResult:
             "pnl_percent": pl.Float64(),
             "bars_held": pl.Int32(),
             "fees": pl.Float64(),
-            "slippage": pl.Float64(),
+            "exit_slippage": pl.Float64(),
             "mfe": pl.Float64(),
             "mae": pl.Float64(),
             "entry_slippage": pl.Float64(),
             "multiplier": pl.Float64(),
+            "entry_quote_mid_price": pl.Float64(),
+            "entry_bid_price": pl.Float64(),
+            "entry_ask_price": pl.Float64(),
+            "entry_spread": pl.Float64(),
+            "entry_available_size": pl.Float64(),
+            "exit_quote_mid_price": pl.Float64(),
+            "exit_bid_price": pl.Float64(),
+            "exit_ask_price": pl.Float64(),
+            "exit_spread": pl.Float64(),
+            "exit_available_size": pl.Float64(),
             "gross_pnl": pl.Float64(),
             "net_return": pl.Float64(),
             "total_slippage_cost": pl.Float64(),
             "cost_drag": pl.Float64(),
             "exit_reason": pl.String(),
             "status": pl.String(),  # "closed" or "open"
+        }
+
+    @staticmethod
+    def _fills_schema() -> dict[str, pl.DataType]:
+        """Schema for fills DataFrame."""
+        return {
+            "order_id": pl.String(),
+            "rebalance_id": pl.String(),
+            "asset": pl.String(),
+            "side": pl.String(),
+            "quantity": pl.Float64(),
+            "price": pl.Float64(),
+            "timestamp": pl.Datetime(),
+            "commission": pl.Float64(),
+            "slippage": pl.Float64(),
+            "order_type": pl.String(),
+            "limit_price": pl.Float64(),
+            "stop_price": pl.Float64(),
+            "price_source": pl.String(),
+            "reference_price": pl.Float64(),
+            "quote_mid_price": pl.Float64(),
+            "bid_price": pl.Float64(),
+            "ask_price": pl.Float64(),
+            "spread": pl.Float64(),
+            "bid_size": pl.Float64(),
+            "ask_size": pl.Float64(),
+            "available_size": pl.Float64(),
         }
 
     @staticmethod
@@ -835,112 +874,17 @@ class BacktestResult:
             "high_water_mark": pl.Float64(),
         }
 
-    def to_tearsheet(
-        self,
-        template: Literal["quant_trader", "hedge_fund", "risk_manager", "full"] = "full",
-        theme: Literal["default", "dark", "print", "presentation"] = "default",
-        title: str | None = None,
-        output_path: str | Path | None = None,
-        include_statistical: bool = True,
-        calendar: str | None = None,
-    ) -> str:
-        """Generate an interactive HTML tearsheet for the backtest results.
-
-        This method integrates with ml4t.diagnostic to create comprehensive
-        backtest visualizations including:
-        - Executive summary with KPI cards and traffic lights
-        - Trade analysis (MFE/MAE, exit reasons, waterfall)
-        - Cost attribution (commission, slippage breakdown)
-        - Statistical validity (DSR, confidence intervals, RAS)
-
-        Parameters
-        ----------
-        template : {"quant_trader", "hedge_fund", "risk_manager", "full"}
-            Report template persona:
-            - "quant_trader": Trade-level focus (MFE/MAE, exit reasons)
-            - "hedge_fund": Risk-adjusted focus (drawdowns, costs)
-            - "risk_manager": Statistical focus (DSR, CI, MinTRL)
-            - "full": All sections enabled
-        theme : {"default", "dark", "print", "presentation"}
-            Visual theme for the report
-        title : str, optional
-            Report title. Defaults to "Backtest Tearsheet"
-        output_path : str or Path, optional
-            If provided, saves HTML to this path
-        include_statistical : bool
-            Whether to include statistical validity analysis (DSR, RAS).
-            Requires sufficient trades for meaningful statistics.
-        calendar : str, optional
-            Trading calendar for session alignment (e.g. "NYSE", "crypto").
-            Passed to to_daily_returns() for correct daily aggregation.
-
-        Returns
-        -------
-        str
-            HTML content of the tearsheet
-
-        Raises
-        ------
-        ImportError
-            If ml4t-diagnostic is not installed
-
-        Examples
-        --------
-        >>> result = engine.run()
-        >>> html = result.to_tearsheet(template="quant_trader", theme="dark")
-        >>> # Or save directly to file
-        >>> result.to_tearsheet(output_path="backtest_report.html")
-        """
-        try:
-            from ml4t.diagnostic.visualization.backtest import generate_backtest_tearsheet
-        except ImportError as e:
-            raise ImportError(
-                "ml4t-diagnostic is required for tearsheet generation. "
-                "Install it with: pip install ml4t-diagnostic[viz]"
-            ) from e
-
-        # Extract data for tearsheet
-        trades_df = self.to_trades_dataframe()
-        # Use daily returns (not bar-level) for correct annualized metrics
-        returns = self.to_daily_returns(calendar=calendar).to_numpy()
-
-        # Build metrics dict with all available metrics
-        tearsheet_metrics = dict(self.metrics)
-
-        # Ensure common metrics are present
-        if "n_trades" not in tearsheet_metrics:
-            tearsheet_metrics["n_trades"] = len(self.trades)
-        if "total_pnl" not in tearsheet_metrics and self.trades:
-            tearsheet_metrics["total_pnl"] = sum(t.pnl for t in self.trades)
-        if "win_rate" not in tearsheet_metrics and self.trades:
-            winners = sum(1 for t in self.trades if t.pnl > 0)
-            tearsheet_metrics["win_rate"] = winners / len(self.trades) if self.trades else 0
-        if "total_commission" not in tearsheet_metrics and self.trades:
-            tearsheet_metrics["total_commission"] = sum(t.fees for t in self.trades)
-        if "total_slippage" not in tearsheet_metrics and self.trades:
-            tearsheet_metrics["total_slippage"] = sum(t.total_slippage_cost for t in self.trades)
-
-        # Extract equity curve for portfolio-level charts
-        equity_df = self.to_equity_dataframe() if self.equity_curve else None
-
-        # Generate tearsheet
-        html = generate_backtest_tearsheet(
-            metrics=tearsheet_metrics,
-            trades=trades_df if len(trades_df) > 0 else None,
-            returns=returns if len(returns) > 0 else None,
-            equity_curve=equity_df,
-            template=template,
-            theme=theme,
-            title=title or "Backtest Tearsheet",
-        )
-
-        # Save to file if path provided
-        if output_path is not None:
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(html)
-
-        return html
+    @staticmethod
+    def _portfolio_state_schema() -> dict[str, pl.DataType]:
+        """Schema for portfolio state DataFrame."""
+        return {
+            "timestamp": pl.Datetime(),
+            "equity": pl.Float64(),
+            "cash": pl.Float64(),
+            "gross_exposure": pl.Float64(),
+            "net_exposure": pl.Float64(),
+            "open_positions": pl.Int32(),
+        }
 
     def __repr__(self) -> str:
         """String representation."""

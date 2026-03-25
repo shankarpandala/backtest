@@ -42,7 +42,7 @@ print(f"Trades:       {result.metrics['num_trades']}")
 
 ## Data Format
 
-DataFeed expects a Polars DataFrame with these columns:
+DataFeed expects a Polars DataFrame keyed by `timestamp` and `asset` plus at least one price column. Standard OHLCV is the default:
 
 | Column | Type | Required |
 |--------|------|----------|
@@ -56,6 +56,8 @@ DataFeed expects a Polars DataFrame with these columns:
 
 For multi-asset backtests, stack all assets in a single DataFrame -- the engine
 handles partitioning by timestamp automatically.
+
+`bar["price"]` is always populated. By default it follows `close`, but it switches to `FeedSpec.price_col` or the `price_col=` override when you provide one.
 
 ## Strategy Callbacks
 
@@ -72,7 +74,7 @@ class MyStrategy(Strategy):
 
         Args:
             timestamp: Current bar's datetime
-            data: Dict of {asset: {open, high, low, close, volume, signals}}
+            data: Dict of {asset: {price, open, high, low, close, volume, signals, ...}}
             context: Dict of context data (if provided)
             broker: Broker for submitting orders and querying positions
         """
@@ -99,7 +101,7 @@ class SignalStrategy(Strategy):
             if signal > 0.7 and position is None:
                 # Buy 10% of portfolio value
                 equity = broker.get_account_value()
-                shares = int(equity * 0.10 / bar["close"])
+                shares = int(equity * 0.10 / bar["price"])
                 if shares > 0:
                     broker.submit_order(asset, shares)
 
@@ -109,6 +111,31 @@ class SignalStrategy(Strategy):
 # Signals DataFrame has same timestamp/asset columns plus your signal columns
 result = run_backtest(prices, SignalStrategy(), signals=signals_df)
 ```
+
+## Quote-Aware Feeds
+
+If you have quotes, add them without changing your strategy interface:
+
+```python
+from ml4t.backtest import BacktestConfig, DataFeed
+from ml4t.backtest.config import ExecutionPrice
+
+feed = DataFeed(
+    prices_df=quotes_df,
+    price_col="mid_price",
+    bid_col="bid",
+    ask_col="ask",
+    bid_size_col="bid_size",
+    ask_size_col="ask_size",
+)
+
+config = BacktestConfig(
+    execution_price=ExecutionPrice.QUOTE_SIDE,
+    mark_price=ExecutionPrice.QUOTE_SIDE,
+)
+```
+
+Buys then fill from the ask, sells fill from the bid, and `bar["price"]` still gives your configured reference price.
 
 ## Adding Transaction Costs
 
@@ -167,7 +194,7 @@ class ProtectedStrategy(Strategy):
         for asset, bar in data.items():
             if broker.get_position(asset) is None:
                 equity = broker.get_account_value()
-                shares = int(equity * 0.10 / bar["close"])
+                shares = int(equity * 0.10 / bar["price"])
                 if shares > 0:
                     broker.submit_order(asset, shares)
 ```
@@ -193,9 +220,21 @@ print(trades_df.head())
 equity_df = result.to_equity_dataframe()
 print(equity_df.head())
 
+# Fills as Polars DataFrame
+fills_df = result.to_fills_dataframe()
+print(fills_df.head())
+
+# Portfolio state snapshots
+portfolio_df = result.to_portfolio_state_dataframe()
+print(portfolio_df.head())
+
 # Export to Parquet for analysis with ml4t-diagnostic
 result.to_parquet("./results/my_backtest")
 ```
+
+For quote-aware backtests, `fills_df` and `trades_df` preserve the quote context
+used for execution, while `portfolio_df` shows the effect of the configured
+marking source over time.
 
 ## Convenience Function
 

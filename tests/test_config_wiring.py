@@ -20,7 +20,9 @@ from ml4t.backtest import (
 )
 from ml4t.backtest.config import (
     CommissionType,
+    DataFrequency,
     EntryOrderPriority,
+    ExecutionPrice,
     FillOrdering,
     ShareType,
     ShortCashPolicy,
@@ -35,6 +37,7 @@ from ml4t.backtest.models import (
     VolumeShareSlippage,
 )
 from ml4t.backtest.types import OrderSide, Position
+from ml4t.data.artifacts.market_data import FeedSpec
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -845,11 +848,13 @@ class TestImmediateFill:
         assert config.settlement_delay == 2
 
     def test_to_dict_from_dict_roundtrip(self):
-        config = BacktestConfig(immediate_fill=True)
+        config = BacktestConfig(immediate_fill=True, mark_price=ExecutionPrice.QUOTE_MID)
         d = config.to_dict()
         assert d["orders"]["immediate_fill"] is True
+        assert d["execution"]["mark_price"] == "quote_mid"
         restored = BacktestConfig.from_dict(d)
         assert restored.immediate_fill is True
+        assert restored.mark_price == ExecutionPrice.QUOTE_MID
 
 
 class TestFromDictDefaultParity:
@@ -862,6 +867,7 @@ class TestFromDictDefaultParity:
         # Core execution fields that were previously mismatched
         assert from_empty.execution_mode == default.execution_mode
         assert from_empty.execution_price == default.execution_price
+        assert from_empty.mark_price == default.mark_price
         assert from_empty.rebalance_mode == default.rebalance_mode
 
         # Verify all enum fields match
@@ -887,6 +893,129 @@ class TestFromDictDefaultParity:
         assert from_empty.allow_short_selling == default.allow_short_selling
         assert from_empty.allow_leverage == default.allow_leverage
         assert from_empty.settlement_delay == default.settlement_delay
+
+
+class TestFeedSpecConfigResolution:
+    def test_constructor_canonicalizes_feed_spec_metadata(self):
+        config = BacktestConfig(
+            feed_spec={
+                "calendar": "NYSE",
+                "timezone": "America/New_York",
+                "data_frequency": "minute",
+            }
+        )
+
+        assert isinstance(config.feed_spec, FeedSpec)
+        assert config.calendar == "NYSE"
+        assert config.timezone == "America/New_York"
+        assert config.data_frequency == DataFrequency.MINUTE_1
+        assert config.resolved_calendar == "NYSE"
+        assert config.resolved_timezone == "America/New_York"
+        assert config.resolved_data_frequency == DataFrequency.MINUTE_1
+        assert config.resolved_feed_spec.calendar == "NYSE"
+        assert config.resolved_feed_spec.timezone == "America/New_York"
+        assert config.resolved_feed_spec.data_frequency == DataFrequency.MINUTE_1
+
+    def test_resolved_feed_spec_preserves_explicit_runtime_over_feed_metadata(self):
+        config = BacktestConfig(
+            timezone="UTC",
+            data_frequency=DataFrequency.DAILY,
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+                session_start_time="17:00",
+                timestamp_semantics="event_time",
+            ),
+        )
+
+        assert config.feed_spec is not None
+        assert config.feed_spec.timezone == "America/New_York"
+        assert config.timezone == "UTC"
+        assert config.data_frequency == DataFrequency.DAILY
+        assert config.resolved_calendar == "NYSE"
+        assert config.resolved_timezone == "UTC"
+        assert config.resolved_data_frequency == DataFrequency.DAILY
+        assert config.resolved_session_start_time == "17:00"
+        assert config.resolved_timestamp_semantics is not None
+        assert config.resolved_timestamp_semantics.value == "event_time"
+        assert config.resolved_feed_spec.calendar == "NYSE"
+        assert config.resolved_feed_spec.timezone == "UTC"
+        assert config.resolved_feed_spec.data_frequency == DataFrequency.DAILY
+        assert config.resolved_feed_spec.session_start_time == "17:00"
+
+    def test_merge_feed_spec_fills_missing_runtime_fields(self):
+        config = BacktestConfig()
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        assert merged is not config
+        assert merged.feed_spec is not None
+        assert merged.calendar == "NYSE"
+        assert merged.timezone == "America/New_York"
+        assert merged.data_frequency == DataFrequency.MINUTE_1
+        assert merged._explicit_timezone is False
+        assert merged._explicit_data_frequency is False
+
+    def test_merge_feed_spec_preserves_explicit_runtime_fields(self):
+        config = BacktestConfig(timezone="UTC", data_frequency=DataFrequency.DAILY)
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        assert merged.calendar == "NYSE"
+        assert merged.timezone == "UTC"
+        assert merged.data_frequency == DataFrequency.DAILY
+        assert merged._explicit_timezone is True
+        assert merged._explicit_data_frequency is True
+
+    def test_merge_feed_spec_ignores_runtime_argument_when_constructor_spec_exists(self):
+        config = BacktestConfig(
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        merged = config.merge_feed_spec(
+            FeedSpec(
+                calendar="CME_Equity",
+                timezone="America/Chicago",
+                data_frequency="daily",
+            )
+        )
+
+        assert merged is config
+        assert merged.feed_spec is not None
+        assert merged.feed_spec.calendar == "NYSE"
+        assert merged.feed_spec.timezone == "America/New_York"
+        assert merged.feed_spec.data_frequency == "minute"
+
+    def test_merge_feed_spec_returns_identity_when_no_updates_are_needed(self):
+        config = BacktestConfig(
+            feed_spec=FeedSpec(
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            )
+        )
+
+        merged = config.merge_feed_spec(config.feed_spec)
+
+        assert merged is config
+        assert config.merge_feed_spec(None) is config
 
 
 class TestConfigModelWiring:

@@ -31,7 +31,7 @@ def sample_winning_trade() -> Trade:
         pnl_percent=6.67,
         bars_held=5,
         fees=10.0,
-        slippage=5.0,
+        exit_slippage=5.0,
         mfe=8.0,
         mae=-2.0,
     )
@@ -51,7 +51,7 @@ def sample_losing_trade() -> Trade:
         pnl_percent=-5.0,
         bars_held=5,
         fees=8.0,
-        slippage=4.0,
+        exit_slippage=4.0,
         mfe=2.0,
         mae=-6.0,
     )
@@ -71,7 +71,7 @@ def sample_short_trade() -> Trade:
         pnl_percent=4.0,
         bars_held=4,
         fees=12.0,
-        slippage=6.0,
+        exit_slippage=6.0,
         mfe=5.0,
         mae=-3.0,
     )
@@ -119,7 +119,7 @@ class TestToTradeRecord:
         assert record["timestamp"] == sample_winning_trade.exit_time
         assert record["entry_timestamp"] == sample_winning_trade.entry_time
         assert record["fees"] == 10.0
-        assert record["slippage"] == 5.0
+        assert record["exit_slippage"] == 5.0
 
     def test_short_trade(self, sample_short_trade: Trade):
         """Test conversion of a short trade."""

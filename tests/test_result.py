@@ -10,10 +10,11 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
+from ml4t.backtest.config import BacktestConfig
 from ml4t.backtest.result import (
     BacktestResult,
-    _get_annualization_factor,
     enrich_trades_with_signals,
 )
 from ml4t.backtest.types import Fill, OrderSide, Trade
@@ -35,7 +36,7 @@ def sample_trades() -> list[Trade]:
             pnl_percent=3.33,
             bars_held=24,
             fees=10.0,
-            slippage=5.0,
+            exit_slippage=5.0,
             exit_reason="signal",
             mfe=4.0,
             mae=-1.0,
@@ -51,7 +52,7 @@ def sample_trades() -> list[Trade]:
             pnl_percent=1.67,
             bars_held=36,
             fees=8.0,
-            slippage=3.0,
+            exit_slippage=3.0,
             exit_reason="stop_loss",
             mfe=2.5,
             mae=-0.5,
@@ -85,6 +86,7 @@ def sample_fills() -> list[Fill]:
             timestamp=base_time,
             quantity=100.0,
             price=150.0,
+            rebalance_id="rebalance-1",
             commission=5.0,
             slippage=2.5,
         ),
@@ -95,9 +97,43 @@ def sample_fills() -> list[Fill]:
             timestamp=base_time + timedelta(hours=2),
             quantity=100.0,
             price=155.0,
+            rebalance_id="rebalance-1",
             commission=5.0,
             slippage=2.5,
         ),
+    ]
+
+
+@pytest.fixture
+def sample_predictions() -> pl.DataFrame:
+    """Create sample raw predictions used by a backtest."""
+    base_time = datetime(2024, 1, 1, 10, 0)
+    return pl.DataFrame(
+        {
+            "timestamp": [
+                base_time,
+                base_time,
+                base_time + timedelta(hours=1),
+                base_time + timedelta(hours=1),
+            ],
+            "asset": ["AAPL", "MSFT", "AAPL", "MSFT"],
+            "prediction": [0.8, -0.2, 0.6, 0.1],
+            "confidence": [0.9, 0.4, 0.85, 0.55],
+        }
+    )
+
+
+@pytest.fixture
+def sample_portfolio_state() -> list[tuple[datetime, float, float, float, float, int]]:
+    """Create sample portfolio state snapshots for testing."""
+    base_time = datetime(2024, 1, 1, 10, 0)
+    return [
+        (base_time, 100000.0, 85000.0, 15000.0, 15000.0, 1),
+        (base_time + timedelta(hours=1), 100100.0, 85000.0, 15100.0, 15100.0, 1),
+        (base_time + timedelta(hours=2), 100500.0, 100500.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=3), 100400.0, 100400.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=4), 100800.0, 100800.0, 0.0, 0.0, 0),
+        (base_time + timedelta(hours=5), 100750.0, 100750.0, 0.0, 0.0, 0),
     ]
 
 
@@ -106,12 +142,16 @@ def backtest_result(
     sample_trades: list[Trade],
     sample_equity_curve: list[tuple[datetime, float]],
     sample_fills: list[Fill],
+    sample_predictions: pl.DataFrame,
+    sample_portfolio_state: list[tuple[datetime, float, float, float, float, int]],
 ) -> BacktestResult:
     """Create BacktestResult for testing."""
     return BacktestResult(
         trades=sample_trades,
         equity_curve=sample_equity_curve,
         fills=sample_fills,
+        predictions=sample_predictions,
+        portfolio_state=sample_portfolio_state,
         metrics={
             "final_value": 100750.0,
             "total_return_pct": 0.75,
@@ -142,11 +182,21 @@ class TestBacktestResultTradesDataFrame:
             "pnl_percent",
             "bars_held",
             "fees",
-            "slippage",
+            "exit_slippage",
             "mfe",
             "mae",
             "entry_slippage",
             "multiplier",
+            "entry_quote_mid_price",
+            "entry_bid_price",
+            "entry_ask_price",
+            "entry_spread",
+            "entry_available_size",
+            "exit_quote_mid_price",
+            "exit_bid_price",
+            "exit_ask_price",
+            "exit_spread",
+            "exit_available_size",
             "gross_pnl",
             "net_return",
             "total_slippage_cost",
@@ -256,6 +306,109 @@ class TestBacktestResultEquityDataFrame:
         assert df1 is df2
 
 
+class TestBacktestResultFillsDataFrame:
+    """Tests for to_fills_dataframe()."""
+
+    def test_fills_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_fills_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 2
+        assert df.columns == [
+            "order_id",
+            "rebalance_id",
+            "asset",
+            "side",
+            "quantity",
+            "price",
+            "timestamp",
+            "commission",
+            "slippage",
+            "order_type",
+            "limit_price",
+            "stop_price",
+            "price_source",
+            "reference_price",
+            "quote_mid_price",
+            "bid_price",
+            "ask_price",
+            "spread",
+            "bid_size",
+            "ask_size",
+            "available_size",
+        ]
+        assert df["rebalance_id"].to_list() == ["rebalance-1", "rebalance-1"]
+
+    def test_fills_dataframe_empty(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_fills_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 0
+        assert "order_id" in df.columns
+
+
+class TestBacktestResultPredictionsDataFrame:
+    """Tests for to_predictions_dataframe()."""
+
+    def test_predictions_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_predictions_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 4
+        assert df.columns == ["timestamp", "asset", "prediction", "confidence"]
+        assert df["prediction"].to_list() == [0.8, -0.2, 0.6, 0.1]
+
+    def test_predictions_dataframe_empty_when_absent(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_predictions_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df.columns) == 0
+
+
+class TestBacktestResultPortfolioStateDataFrame:
+    """Tests for to_portfolio_state_dataframe()."""
+
+    def test_portfolio_state_dataframe_basic(self, backtest_result: BacktestResult):
+        df = backtest_result.to_portfolio_state_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 6
+        assert df.columns == [
+            "timestamp",
+            "equity",
+            "cash",
+            "gross_exposure",
+            "net_exposure",
+            "open_positions",
+        ]
+
+    def test_portfolio_state_dataframe_values(self, backtest_result: BacktestResult):
+        df = backtest_result.to_portfolio_state_dataframe()
+
+        assert df["equity"][0] == 100000.0
+        assert df["cash"][0] == 85000.0
+        assert df["gross_exposure"][0] == 15000.0
+        assert df["net_exposure"][2] == 0.0
+        assert df["open_positions"][0] == 1
+        assert df["open_positions"][2] == 0
+
+    def test_portfolio_state_dataframe_empty(self):
+        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
+        df = result.to_portfolio_state_dataframe()
+
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 0
+        assert "gross_exposure" in df.columns
+
+    def test_portfolio_state_dataframe_caching(self, backtest_result: BacktestResult):
+        df1 = backtest_result.to_portfolio_state_dataframe()
+        df2 = backtest_result.to_portfolio_state_dataframe()
+
+        assert df1 is df2
+
+
 class TestBacktestResultDailyPnL:
     """Tests for to_daily_pnl()."""
 
@@ -303,6 +456,32 @@ class TestBacktestResultDailyPnL:
         assert df["date"][1] == datetime(2024, 1, 2).date()
         assert df["date"][2] == datetime(2024, 1, 3).date()
 
+    def test_daily_returns_auto_aligns_using_feed_session_metadata(self):
+        """Auto alignment should follow feed session metadata, not just calendar name."""
+        from ml4t.backtest.config import BacktestConfig
+
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[
+                (datetime(2024, 1, 1, 18, 0), 100000.0),
+                (datetime(2024, 1, 2, 10, 0), 101000.0),
+            ],
+            fills=[],
+            metrics={},
+            config=BacktestConfig(
+                calendar="NYSE",
+                timezone="America/New_York",
+                feed_spec=FeedSpec(
+                    calendar="NYSE",
+                    session_start_time="17:00",
+                    timestamp_semantics="event_time",
+                ),
+            ),
+        )
+
+        assert len(result.to_daily_pnl()) == 2
+        assert len(result.to_daily_returns()) == 1
+
 
 class TestBacktestResultReturnsSeries:
     """Tests for to_returns_series()."""
@@ -348,6 +527,8 @@ class TestBacktestResultDict:
         assert "trades" in d
         assert "equity_curve" in d
         assert "fills" in d
+        assert "predictions" in d
+        assert "portfolio_state" in d
         assert "sharpe" in d
 
     def test_repr(self, backtest_result: BacktestResult):
@@ -377,24 +558,77 @@ class TestBacktestResultDict:
         assert "equity" in d
         assert "trade_analyzer" in d
 
+    def test_to_spec_dict_returns_resolved_config_snapshot(self):
+        """Test resolved config snapshot contains defaults, feed, metadata, and runtime window."""
+        config = BacktestConfig(
+            initial_cash=250000.0,
+            commission_rate=0.0025,
+            feed_spec=FeedSpec(
+                timestamp_col="time",
+                entity_col="ticker",
+                price_col="mid_price",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+            metadata={
+                "strategy_id": "topk_monthly_v2",
+                "signals_path": "/tmp/preds.parquet",
+            },
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[
+                (datetime(2024, 1, 2, 9, 30), 100000.0),
+                (datetime(2024, 1, 31, 16, 0), 101500.0),
+            ],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        spec = result.to_spec_dict()
+
+        assert spec["version"] == 1
+        assert isinstance(spec["library_version"], str)
+        assert spec["config"]["cash"]["initial"] == 250000.0
+        assert spec["config"]["commission"]["rate"] == 0.0025
+        assert spec["config"]["feed"]["timestamp_col"] == "time"
+        assert spec["config"]["feed"]["entity_col"] == "ticker"
+        assert spec["config"]["feed"]["price_col"] == "mid_price"
+        assert spec["config"]["metadata"]["strategy_id"] == "topk_monthly_v2"
+        assert spec["window"]["start"] == "2024-01-02T09:30:00"
+        assert spec["window"]["end"] == "2024-01-31T16:00:00"
+
 
 class TestBacktestResultParquet:
     """Tests for Parquet serialization."""
 
     def test_to_parquet_basic(self, backtest_result: BacktestResult):
         """Test basic Parquet export."""
+        backtest_result.config = BacktestConfig(metadata={"strategy_id": "default_export"})
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "test_backtest"
             written = backtest_result.to_parquet(path)
 
             assert "trades" in written
+            assert "fills" in written
+            assert "predictions" in written
             assert "equity" in written
+            assert "portfolio_state" in written
             assert "daily_pnl" in written
             assert "metrics" in written
+            assert "config" in written
+            assert "spec" in written
 
             assert written["trades"].exists()
+            assert written["fills"].exists()
+            assert written["predictions"].exists()
             assert written["equity"].exists()
+            assert written["portfolio_state"].exists()
             assert written["metrics"].exists()
+            assert written["config"].exists()
+            assert written["spec"].exists()
 
     def test_to_parquet_selective(self, backtest_result: BacktestResult):
         """Test selective Parquet export."""
@@ -404,7 +638,10 @@ class TestBacktestResultParquet:
 
             assert "trades" in written
             assert "metrics" in written
+            assert "fills" not in written
+            assert "predictions" not in written
             assert "equity" not in written
+            assert "portfolio_state" not in written
 
     def test_to_parquet_config_write_failure_is_non_fatal(self):
         """Test config export failure is swallowed (ImportError/AttributeError path)."""
@@ -425,6 +662,55 @@ class TestBacktestResultParquet:
             written = result.to_parquet(path, include=["config"])
             assert "config" not in written
 
+    def test_to_parquet_writes_spec_snapshot(self):
+        """Test resolved runtime spec export."""
+        config = BacktestConfig(
+            initial_cash=75000.0,
+            metadata={"strategy_id": "demo"},
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[(datetime(2024, 1, 1, 10, 0), 75000.0)],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            written = result.to_parquet(path, include=["spec"])
+
+            assert "spec" in written
+            assert written["spec"].exists()
+
+            import yaml
+
+            with open(written["spec"]) as f:
+                spec = yaml.safe_load(f)
+
+            assert spec["config"]["cash"]["initial"] == 75000.0
+            assert spec["config"]["metadata"]["strategy_id"] == "demo"
+            assert spec["window"]["start"] == "2024-01-01T10:00:00"
+
+    def test_to_parquet_writes_predictions_snapshot(self, sample_predictions: pl.DataFrame):
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[],
+            fills=[],
+            predictions=sample_predictions,
+            metrics={},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            written = result.to_parquet(path, include=["predictions"])
+
+            assert "predictions" in written
+            assert written["predictions"].exists()
+
+            loaded = pl.read_parquet(written["predictions"])
+            assert loaded.equals(sample_predictions)
+
     def test_from_parquet_roundtrip(self, backtest_result: BacktestResult):
         """Test Parquet save and load roundtrip."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -434,7 +720,12 @@ class TestBacktestResultParquet:
             loaded = BacktestResult.from_parquet(path)
 
             assert len(loaded.trades) == len(backtest_result.trades)
+            assert len(loaded.fills) == len(backtest_result.fills)
+            assert loaded.predictions is not None
+            assert loaded.predictions.equals(backtest_result.predictions)
             assert len(loaded.equity_curve) == len(backtest_result.equity_curve)
+            assert len(loaded.portfolio_state) == len(backtest_result.portfolio_state)
+            assert loaded.fills[0].rebalance_id == "rebalance-1"
             assert loaded.metrics["sharpe"] == backtest_result.metrics["sharpe"]
 
     def test_to_parquet_compression(self, backtest_result: BacktestResult):
@@ -467,6 +758,30 @@ class TestBacktestResultParquet:
             )
             loaded = BacktestResult.from_parquet(path)
             assert loaded.config is None
+
+    def test_from_parquet_loads_config_from_spec_when_config_yaml_missing(self):
+        """Test spec.yaml fallback restores replayable config."""
+        config = BacktestConfig(
+            initial_cash=82000.0,
+            metadata={"strategy_id": "spec_fallback"},
+        )
+        result = BacktestResult(
+            trades=[],
+            equity_curve=[(datetime(2024, 2, 1, 10, 0), 82000.0)],
+            fills=[],
+            metrics={},
+            config=config,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_backtest"
+            result.to_parquet(path, include=["spec"])
+
+            loaded = BacktestResult.from_parquet(path)
+
+            assert loaded.config is not None
+            assert loaded.config.initial_cash == 82000.0
+            assert loaded.config.metadata["strategy_id"] == "spec_fallback"
 
     def test_metrics_json_serialization(self, backtest_result: BacktestResult):
         """Test metrics JSON contains only serializable values."""
@@ -687,114 +1002,6 @@ class TestEnrichTradesWithSignals:
         assert "symbol" in enriched.columns
 
 
-class TestBacktestResultMetrics:
-    """Tests for annualization and compute_metrics branches."""
-
-    def test_get_annualization_factor_known_and_fallback(self):
-        assert _get_annualization_factor("nyse") == 252
-        assert _get_annualization_factor("crypto") == 365
-        assert _get_annualization_factor(None) == 252
-        assert _get_annualization_factor("not_a_real_calendar") == 252
-
-    def test_compute_metrics_import_error(self, backtest_result: BacktestResult, monkeypatch):
-        def _raise(_name: str):
-            raise ImportError("nope")
-
-        monkeypatch.setattr("importlib.import_module", _raise)
-        with pytest.raises(ImportError, match="ml4t-diagnostic is required"):
-            backtest_result.compute_metrics()
-
-    def test_compute_metrics_with_empty_inputs(self, monkeypatch):
-        def _sharpe(_arr, annualization_factor):
-            return 1.23 + (annualization_factor * 0.0)
-
-        def _sortino(_arr, annualization_factor):
-            return 2.34 + (annualization_factor * 0.0)
-
-        diag = SimpleNamespace(
-            sharpe_ratio=_sharpe,
-            sortino_ratio=_sortino,
-        )
-        monkeypatch.setattr("importlib.import_module", lambda _name: diag)
-
-        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
-        metrics = result.compute_metrics(calendar="NYSE")
-
-        assert metrics["sharpe_ratio"] == 0.0
-        assert metrics["sortino_ratio"] == 0.0
-        assert metrics["max_drawdown"] == 0.0
-        assert metrics["total_return"] == 0.0
-        assert metrics["cagr"] == 0.0
-        assert metrics["calmar_ratio"] == 0.0
-        assert metrics["num_trades"] == 0
-
-    def test_compute_metrics_with_trade_analyzer(
-        self, backtest_result: BacktestResult, monkeypatch
-    ):
-        def _sharpe(_arr, annualization_factor):
-            return 1.11 + (annualization_factor * 0.0)
-
-        def _sortino(_arr, annualization_factor):
-            return 1.22 + (annualization_factor * 0.0)
-
-        diag = SimpleNamespace(
-            sharpe_ratio=_sharpe,
-            sortino_ratio=_sortino,
-        )
-        monkeypatch.setattr("importlib.import_module", lambda _name: diag)
-        backtest_result.trade_analyzer = SimpleNamespace(
-            num_trades=7,
-            win_rate=0.57,
-            profit_factor=1.8,
-            expectancy=0.012,
-            avg_trade=0.009,
-            avg_win=0.021,
-            avg_loss=-0.008,
-            total_fees=34.0,
-        )
-
-        metrics = backtest_result.compute_metrics(calendar="NYSE")
-        assert metrics["num_trades"] == 7
-        assert metrics["total_fees"] == 34.0
-
-    def test_to_portfolio_analysis_cme_uses_session_aligned_returns(self, monkeypatch):
-        """Portfolio analysis should use the same daily alignment logic as daily returns."""
-        import builtins
-        from datetime import UTC
-
-        from ml4t.backtest.config import BacktestConfig
-
-        class FakePortfolioAnalysis:
-            def __init__(self, returns, **kwargs):
-                self.returns = returns
-                self.kwargs = kwargs
-
-        real_import = builtins.__import__
-
-        def _import(name, *args, **kwargs):
-            if name == "ml4t.diagnostic.evaluation":
-                return SimpleNamespace(PortfolioAnalysis=FakePortfolioAnalysis)
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _import)
-
-        result = BacktestResult(
-            trades=[],
-            equity_curve=[
-                (datetime(2025, 1, 6, 22, 30, tzinfo=UTC), 100.0),
-                (datetime(2025, 1, 6, 23, 30, tzinfo=UTC), 110.0),
-                (datetime(2025, 1, 7, 21, 0, tzinfo=UTC), 120.0),
-                (datetime(2025, 1, 7, 23, 30, tzinfo=UTC), 130.0),
-            ],
-            fills=[],
-            metrics={},
-            config=BacktestConfig(calendar="CME_Equity", timezone="America/Chicago"),
-        )
-        expected = result.to_daily_returns(calendar="CME_Equity").to_list()
-        analysis = result.to_portfolio_analysis(calendar="CME_Equity")
-        assert list(analysis.returns) == pytest.approx(expected)
-
-
 class TestBacktestResultSchemas:
     """Tests for schema definitions."""
 
@@ -816,70 +1023,3 @@ class TestBacktestResultSchemas:
         assert schema["equity"] == pl.Float64()
         assert schema["return"] == pl.Float64()
         assert schema["drawdown"] == pl.Float64()
-
-
-class TestBacktestResultTearsheet:
-    """Tests for tearsheet import-error handling."""
-
-    def test_to_tearsheet_import_error(self, monkeypatch):
-        """Test to_tearsheet raises helpful ImportError when diagnostic is unavailable."""
-        import builtins
-
-        real_import = builtins.__import__
-
-        def _raising_import(name, *args, **kwargs):
-            if name == "ml4t.diagnostic.visualization.backtest":
-                raise ImportError("diagnostic missing")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _raising_import)
-
-        result = BacktestResult(trades=[], equity_curve=[], fills=[], metrics={})
-        with pytest.raises(
-            ImportError, match="ml4t-diagnostic is required for tearsheet generation"
-        ):
-            result.to_tearsheet()
-
-    def test_to_tearsheet_fallback_uses_total_slippage_cost(self, monkeypatch):
-        """Fallback metric extraction should report slippage in dollar cost units."""
-        import builtins
-
-        captured: dict[str, object] = {}
-
-        def _generate_backtest_tearsheet(**kwargs):
-            captured.update(kwargs)
-            return "<html></html>"
-
-        real_import = builtins.__import__
-
-        def _import(name, *args, **kwargs):
-            if name == "ml4t.diagnostic.visualization.backtest":
-                return SimpleNamespace(generate_backtest_tearsheet=_generate_backtest_tearsheet)
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _import)
-
-        trade = Trade(
-            symbol="AAPL",
-            entry_time=datetime(2024, 1, 1, 9, 30),
-            exit_time=datetime(2024, 1, 2, 9, 30),
-            entry_price=100.0,
-            exit_price=101.0,
-            quantity=10.0,
-            pnl=10.0,
-            pnl_percent=0.01,
-            bars_held=1,
-            slippage=0.20,
-            entry_slippage=0.10,
-        )
-        result = BacktestResult(
-            trades=[trade],
-            equity_curve=[(datetime(2024, 1, 1, 9, 30), 100000.0)],
-            fills=[],
-            metrics={},
-        )
-        result.to_tearsheet()
-
-        metrics = captured["metrics"]
-        assert isinstance(metrics, dict)
-        assert metrics["total_slippage"] == pytest.approx(trade.total_slippage_cost)

@@ -58,6 +58,7 @@ class OrderBook:
             limit_price=limit_price,
             stop_price=stop_price,
             trail_amount=trail_amount,
+            rebalance_id=options.rebalance_id if options is not None else None,
             order_id=f"ORD-{broker._order_counter}",
             created_at=broker._current_time,
         )
@@ -237,7 +238,9 @@ class OrderBook:
         self._submission_shadow_positions = {
             asset: (
                 pos.quantity,
-                broker._current_prices.get(asset, pos.current_price or pos.entry_price),
+                broker.get_mark_price(asset, quantity=pos.quantity)
+                or pos.current_price
+                or pos.entry_price,
             )
             for asset, pos in broker.positions.items()
             if abs(pos.quantity) > self._QTY_EPS
@@ -250,7 +253,7 @@ class OrderBook:
         for asset, (qty, basis_price) in self._submission_shadow_positions.items():
             if abs(qty) <= self._QTY_EPS:
                 continue
-            mark_price = broker._current_prices.get(asset, basis_price)
+            mark_price = broker.get_mark_price(asset, quantity=qty) or basis_price
             positions[asset] = Position(
                 asset=asset,
                 quantity=qty,

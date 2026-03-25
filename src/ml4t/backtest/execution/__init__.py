@@ -24,6 +24,7 @@ from .rebalancer import (
     TargetWeightExecutor,
 )
 from .result import ExecutionResult
+from .schedule import RebalanceCadence, RebalanceSchedule, resolve_rebalance_timestamps
 
 __all__ = [
     # Fill Execution
@@ -41,6 +42,9 @@ __all__ = [
     # Rebalancing
     "RebalanceConfig",
     "TargetWeightExecutor",
+    "RebalanceCadence",
+    "RebalanceSchedule",
+    "resolve_rebalance_timestamps",
     # Result
     "ExecutionResult",
 ]

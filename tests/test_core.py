@@ -4,12 +4,14 @@ from datetime import datetime, timedelta
 
 import polars as pl
 import pytest
+from ml4t.data.artifacts.market_data import FeedSpec
 
 from ml4t.backtest import (
     Broker,
     DataFeed,
     Engine,
     ExecutionMode,
+    Fill,
     OrderSide,
     OrderType,
     Strategy,
@@ -18,6 +20,7 @@ from ml4t.backtest import (
 from ml4t.backtest.config import (
     BacktestConfig,
     CommissionType,
+    DataFrequency,
     SlippageType,
 )
 from ml4t.backtest.models import PercentageCommission, VolumeShareSlippage
@@ -184,6 +187,24 @@ class BracketOrderStrategy(Strategy):
                 stop_loss=price * 0.98,
             )
             self.entered = True
+
+
+class BuyThenSellStrategy(Strategy):
+    """Buy on first bar and fully exit on second bar."""
+
+    def __init__(self, asset: str, quantity: float):
+        self.asset = asset
+        self.quantity = quantity
+        self.bar_count = 0
+
+    def on_data(self, timestamp, data, context, broker):
+        if self.asset not in data:
+            return
+        self.bar_count += 1
+        if self.bar_count == 1:
+            broker.submit_order(self.asset, self.quantity)
+        elif self.bar_count == 2:
+            broker.close_position(self.asset)
 
 
 class VolatilityAdjustedStopStrategy(Strategy):
@@ -481,6 +502,112 @@ class TestEngine:
         assert results.metrics["initial_cash"] == 50000
         assert len(results.equity_curve) == 10
 
+    def test_reports_activity_and_portfolio_state_metrics(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1),
+                    datetime(2024, 1, 2),
+                    datetime(2024, 1, 3),
+                ],
+                "asset": ["AAPL", "AAPL", "AAPL"],
+                "open": [100.0, 110.0, 110.0],
+                "high": [100.0, 110.0, 110.0],
+                "low": [100.0, 110.0, 110.0],
+                "close": [100.0, 110.0, 110.0],
+                "volume": [1000.0, 1000.0, 1000.0],
+            }
+        )
+        engine = Engine(
+            DataFeed(prices_df=prices),
+            BuyThenSellStrategy("AAPL", quantity=10),
+            BacktestConfig(
+                initial_cash=100000.0,
+                execution_mode=ExecutionMode.SAME_BAR,
+                commission_type=CommissionType.NONE,
+                slippage_type=SlippageType.NONE,
+            ),
+        )
+
+        results = engine.run()
+        portfolio_state = results.to_portfolio_state_dataframe()
+
+        assert results.metrics["num_fills"] == 2
+        assert results.metrics["num_rebalance_events"] == 2
+        assert results.metrics["unique_symbols_traded"] == 1
+        assert results.metrics["total_filled_notional"] == pytest.approx(2100.0)
+        assert results.metrics["avg_turnover"] == pytest.approx(
+            ((1000.0 / 100000.0) + (1100.0 / 100100.0)) / 3.0
+        )
+        assert results.metrics["max_turnover"] == pytest.approx(1100.0 / 100100.0)
+        assert results.metrics["avg_open_positions"] == pytest.approx(1.0 / 3.0)
+        assert results.metrics["max_open_positions"] == 1
+
+        assert portfolio_state.columns == [
+            "timestamp",
+            "equity",
+            "cash",
+            "gross_exposure",
+            "net_exposure",
+            "open_positions",
+        ]
+        assert portfolio_state["open_positions"].to_list() == [1, 0, 0]
+        assert portfolio_state["gross_exposure"].to_list() == [1000.0, 0.0, 0.0]
+
+    def test_activity_metrics_prefer_explicit_rebalance_ids(self):
+        prices = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "asset": ["AAPL", "AAPL"],
+                "open": [100.0, 101.0],
+                "high": [100.0, 101.0],
+                "low": [100.0, 101.0],
+                "close": [100.0, 101.0],
+                "volume": [1000.0, 1000.0],
+            }
+        )
+        engine = Engine(
+            DataFeed(prices_df=prices),
+            BuyAndHoldStrategy("AAPL"),
+            BacktestConfig(
+                initial_cash=100000.0,
+                execution_mode=ExecutionMode.SAME_BAR,
+                commission_type=CommissionType.NONE,
+                slippage_type=SlippageType.NONE,
+            ),
+        )
+
+        ts1 = datetime(2024, 1, 1)
+        ts2 = datetime(2024, 1, 2)
+        engine.portfolio_state = [
+            (ts1, 100000.0, 100000.0, 0.0, 0.0, 0),
+            (ts2, 100100.0, 99100.0, 1000.0, 1000.0, 1),
+        ]
+        engine.broker.fills = [
+            Fill(
+                order_id="ORD-1",
+                rebalance_id="rebalance-1",
+                asset="AAPL",
+                side=OrderSide.BUY,
+                quantity=5.0,
+                price=100.0,
+                timestamp=ts1,
+            ),
+            Fill(
+                order_id="ORD-2",
+                rebalance_id="rebalance-1",
+                asset="MSFT",
+                side=OrderSide.BUY,
+                quantity=2.0,
+                price=200.0,
+                timestamp=ts2,
+            ),
+        ]
+
+        metrics = engine._build_activity_metrics()
+
+        assert metrics["num_rebalance_events"] == 1
+
 
 class TestTradeRecording:
     """Test trade recording with signals."""
@@ -613,7 +740,9 @@ class TestEngineFromConfig:
         engine = Engine.from_config(feed, strategy, config)
         results = engine.run()
 
-        assert results.metrics["total_slippage"] > 0
+        assert results.metrics["total_slippage"] == pytest.approx(5.0)
+        assert results.trades[0].entry_slippage == pytest.approx(0.05)
+        assert results.trades[0].exit_slippage == 0.0
 
     def test_from_config_execution_mode_same_bar(self):
         """Test from_config with SAME_BAR execution mode."""
@@ -716,6 +845,120 @@ class TestRunBacktestWithConfig:
 
         assert results.equity_curve is not None
         assert len(results.equity_curve) == 10
+
+    def test_run_backtest_preserves_raw_predictions_dataframe(self):
+        """Test raw input predictions are available on the result surface."""
+        prices = generate_prices(["AAPL"], datetime(2024, 1, 1), 10)
+        signals = generate_signals(["AAPL"], datetime(2024, 1, 1), 10, ["ml_score"])
+        strategy = BuyAndHoldStrategy("AAPL")
+
+        result = run_backtest(prices=prices, signals=signals, strategy=strategy, config="default")
+
+        assert result.predictions is not None
+        assert result.to_predictions_dataframe().equals(signals)
+
+    def test_run_backtest_uses_feed_spec_for_runtime_config(self):
+        """Feed metadata should populate runtime config when explicit config is unset."""
+
+        class PrepareTrackingStrategy(Strategy):
+            def __init__(self):
+                self.seen_config = None
+
+            def on_prepare(self, broker, timestamps, config=None):
+                self.seen_config = config
+
+            def on_data(self, timestamp, data, context, broker):
+                return None
+
+        prices = pl.DataFrame(
+            {
+                "ts": [datetime(2024, 1, 1, 9, 30), datetime(2024, 1, 1, 9, 31)],
+                "ticker": ["AAPL", "AAPL"],
+                "open_px": [100.0, 101.0],
+                "high_px": [101.0, 102.0],
+                "low_px": [99.0, 100.0],
+                "close_px": [100.5, 101.5],
+                "vol": [1000.0, 1100.0],
+            }
+        )
+        strategy = PrepareTrackingStrategy()
+
+        result = run_backtest(
+            prices=prices,
+            strategy=strategy,
+            config=BacktestConfig(),
+            feed_spec=FeedSpec(
+                timestamp_col="ts",
+                entity_col="ticker",
+                open_col="open_px",
+                high_col="high_px",
+                low_col="low_px",
+                close_col="close_px",
+                volume_col="vol",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+        )
+
+        assert strategy.seen_config is not None
+        assert strategy.seen_config.calendar == "NYSE"
+        assert strategy.seen_config.timezone == "America/New_York"
+        assert strategy.seen_config.data_frequency == DataFrequency.MINUTE_1
+        assert result.config is not None
+        assert result.config.calendar == "NYSE"
+
+    def test_run_backtest_preserves_explicit_runtime_config_over_feed_spec(self):
+        """Explicit runtime config should not be overwritten by feed metadata."""
+
+        class PrepareTrackingStrategy(Strategy):
+            def __init__(self):
+                self.seen_config = None
+
+            def on_prepare(self, broker, timestamps, config=None):
+                self.seen_config = config
+
+            def on_data(self, timestamp, data, context, broker):
+                return None
+
+        prices = pl.DataFrame(
+            {
+                "ts": [datetime(2024, 1, 1, 9, 30), datetime(2024, 1, 1, 9, 31)],
+                "ticker": ["AAPL", "AAPL"],
+                "open_px": [100.0, 101.0],
+                "high_px": [101.0, 102.0],
+                "low_px": [99.0, 100.0],
+                "close_px": [100.5, 101.5],
+                "vol": [1000.0, 1100.0],
+            }
+        )
+        strategy = PrepareTrackingStrategy()
+
+        result = run_backtest(
+            prices=prices,
+            strategy=strategy,
+            config=BacktestConfig(timezone="UTC", data_frequency=DataFrequency.DAILY),
+            feed_spec=FeedSpec(
+                timestamp_col="ts",
+                entity_col="ticker",
+                open_col="open_px",
+                high_col="high_px",
+                low_col="low_px",
+                close_col="close_px",
+                volume_col="vol",
+                calendar="NYSE",
+                timezone="America/New_York",
+                data_frequency="minute",
+            ),
+        )
+
+        assert strategy.seen_config is not None
+        assert strategy.seen_config.calendar == "NYSE"
+        assert strategy.seen_config.timezone == "UTC"
+        assert strategy.seen_config.data_frequency == DataFrequency.DAILY
+        assert result.config is not None
+        assert result.config.timezone == "UTC"
+        assert result.config.data_frequency == DataFrequency.DAILY
 
 
 class TestEmptyDataFeed:

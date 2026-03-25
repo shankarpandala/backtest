@@ -10,9 +10,10 @@ import polars as pl
 from .analytics import EquityCurve, TradeAnalyzer
 from .analytics.metrics import calmar_ratio
 from .broker import Broker
+from .config import DataFrequency
 from .datafeed import DataFeed
 from .strategy import Strategy
-from .types import ExecutionMode
+from .types import ExecutionMode, OrderSide
 
 if TYPE_CHECKING:
     from .config import BacktestConfig
@@ -78,15 +79,16 @@ class Engine:
 
         self.feed = feed
         self.strategy = strategy
-        self.config = config
-        self.execution_mode = config.execution_mode
+        self.config = config.merge_feed_spec(getattr(feed, "feed_spec", None))
+        self.execution_mode = self.config.execution_mode
         self.broker = Broker.from_config(
-            config,
+            self.config,
             contract_specs=contract_specs,
             market_impact_model=market_impact_model,
             execution_limits=execution_limits,
         )
         self.equity_curve: list[tuple[datetime, float]] = []
+        self.portfolio_state: list[tuple[datetime, float, float, float, float, int]] = []
 
         # Calendar session enforcement (lazy initialized in run())
         self._calendar = None
@@ -101,12 +103,13 @@ class Engine:
         """
         # Lazy calendar initialization (zero cost if unused)
         is_trading_day_fn = None
-        if self.config and self.config.calendar:
+        if self.config and self.config.resolved_calendar:
             from .calendar import get_calendar, is_trading_day
 
-            self._calendar = get_calendar(self.config.calendar)
+            self._calendar = get_calendar(self.config.resolved_calendar)
             is_trading_day_fn = is_trading_day
 
+        self.strategy.on_prepare(self.broker, self.feed.timestamps, self.config)
         self.strategy.on_start(self.broker)
 
         # Date-level cache for trading day checks (significant speedup for intraday data)
@@ -114,7 +117,7 @@ class Engine:
 
         for timestamp, assets_data, context in self.feed:
             # Calendar session enforcement
-            calendar_id = self.config.calendar if self.config else None
+            calendar_id = self.config.resolved_calendar if self.config else None
             if (
                 self._calendar
                 and calendar_id
@@ -123,7 +126,7 @@ class Engine:
                 and is_trading_day_fn
             ):
                 # For daily data, check trading day; for intraday, check market hours
-                if self.config.data_frequency.value == "daily":
+                if self.config.resolved_data_frequency == DataFrequency.DAILY:
                     if not is_trading_day_fn(calendar_id, timestamp.date()):
                         self._skipped_bars += 1
                         continue
@@ -140,7 +143,13 @@ class Engine:
             opens = getattr(assets_data, "_opens", None)
             highs = getattr(assets_data, "_highs", None)
             lows = getattr(assets_data, "_lows", None)
+            closes = getattr(assets_data, "_closes", None)
             volumes = getattr(assets_data, "_volumes", None)
+            bids = getattr(assets_data, "_bids", None)
+            asks = getattr(assets_data, "_asks", None)
+            mids = getattr(assets_data, "_mids", None)
+            bid_sizes = getattr(assets_data, "_bid_sizes", None)
+            ask_sizes = getattr(assets_data, "_ask_sizes", None)
             signals = getattr(assets_data, "_signals", None)
 
             if (
@@ -148,17 +157,59 @@ class Engine:
                 or opens is None
                 or highs is None
                 or lows is None
+                or closes is None
                 or volumes is None
+                or bids is None
+                or asks is None
+                or mids is None
+                or bid_sizes is None
+                or ask_sizes is None
                 or signals is None
             ):
-                prices = {a: d["close"] for a, d in assets_data.items() if d.get("close")}
+                prices = {
+                    a: price
+                    for a, d in assets_data.items()
+                    if (price := d.get("price", d.get("close"))) is not None
+                }
                 opens = {a: d.get("open", d.get("close")) for a, d in assets_data.items()}
                 highs = {a: d.get("high", d.get("close")) for a, d in assets_data.items()}
                 lows = {a: d.get("low", d.get("close")) for a, d in assets_data.items()}
+                closes = {
+                    a: close
+                    for a, d in assets_data.items()
+                    if (close := d.get("close", d.get("price"))) is not None
+                }
                 volumes = {a: d.get("volume", 0) for a, d in assets_data.items()}
+                bids = {a: d["bid"] for a, d in assets_data.items() if d.get("bid") is not None}
+                asks = {a: d["ask"] for a, d in assets_data.items() if d.get("ask") is not None}
+                mids = {a: d["mid"] for a, d in assets_data.items() if d.get("mid") is not None}
+                bid_sizes = {
+                    a: d["bid_size"]
+                    for a, d in assets_data.items()
+                    if d.get("bid_size") is not None
+                }
+                ask_sizes = {
+                    a: d["ask_size"]
+                    for a, d in assets_data.items()
+                    if d.get("ask_size") is not None
+                }
                 signals = {a: d.get("signals", {}) for a, d in assets_data.items()}
 
-            self.broker._update_time(timestamp, prices, opens, highs, lows, volumes, signals)
+            self.broker._update_time(
+                timestamp,
+                prices,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                bids,
+                asks,
+                mids,
+                bid_sizes,
+                ask_sizes,
+                signals,
+            )
 
             # Process pending exits from NEXT_BAR_OPEN mode (fills at open)
             # This must happen BEFORE evaluate_position_rules() to clear deferred exits
@@ -184,7 +235,7 @@ class Engine:
             # VBT Pro behavior: HWM updated at bar end, used in NEXT bar's trail evaluation
             self.broker._update_water_marks()
 
-            self.equity_curve.append((timestamp, self.broker.get_account_value()))
+            self._record_portfolio_state(timestamp)
 
         self.strategy.on_end(self.broker)
         return self._generate_results()
@@ -200,6 +251,84 @@ class Engine:
         """
         return self.run().to_dict()
 
+    def _record_portfolio_state(self, timestamp: datetime) -> None:
+        """Capture per-bar portfolio state for reporting."""
+        cash = self.broker.cash
+        gross_exposure = 0.0
+        net_exposure = 0.0
+
+        for asset, pos in self.broker.positions.items():
+            price = self.broker.get_mark_price(asset, quantity=pos.quantity)
+            if price is None:
+                price = self.broker._last_prices.get(asset, pos.current_price or pos.entry_price)
+            position_value = pos.quantity * price * pos.multiplier
+            gross_exposure += abs(position_value)
+            net_exposure += position_value
+
+        equity = cash + net_exposure
+        self.equity_curve.append((timestamp, equity))
+        self.portfolio_state.append(
+            (timestamp, equity, cash, gross_exposure, net_exposure, len(self.broker.positions))
+        )
+
+    def _build_activity_metrics(self) -> dict[str, int | float]:
+        """Compute fill and portfolio activity metrics."""
+        fills = self.broker.fills
+        if not fills:
+            avg_open_positions = (
+                sum(state[5] for state in self.portfolio_state) / len(self.portfolio_state)
+                if self.portfolio_state
+                else 0.0
+            )
+            max_open_positions = max((state[5] for state in self.portfolio_state), default=0)
+            return {
+                "num_fills": 0,
+                "num_rebalance_events": 0,
+                "unique_symbols_traded": 0,
+                "total_filled_notional": 0.0,
+                "avg_turnover": 0.0,
+                "max_turnover": 0.0,
+                "avg_open_positions": avg_open_positions,
+                "max_open_positions": max_open_positions,
+            }
+
+        fill_notional_by_timestamp: dict[datetime, float] = {}
+        total_filled_notional = 0.0
+        traded_symbols: set[str] = set()
+        rebalance_events: set[str | datetime] = set()
+
+        for fill in fills:
+            multiplier = self.broker.get_multiplier(fill.asset)
+            notional = abs(fill.quantity) * fill.price * multiplier
+            total_filled_notional += notional
+            fill_notional_by_timestamp[fill.timestamp] = (
+                fill_notional_by_timestamp.get(fill.timestamp, 0.0) + notional
+            )
+            traded_symbols.add(fill.asset)
+            rebalance_events.add(fill.rebalance_id or fill.timestamp)
+
+        turnovers = [
+            fill_notional_by_timestamp.get(timestamp, 0.0) / equity if equity else 0.0
+            for timestamp, equity, *_ in self.portfolio_state
+        ]
+        avg_open_positions = (
+            sum(state[5] for state in self.portfolio_state) / len(self.portfolio_state)
+            if self.portfolio_state
+            else 0.0
+        )
+        max_open_positions = max((state[5] for state in self.portfolio_state), default=0)
+
+        return {
+            "num_fills": len(fills),
+            "num_rebalance_events": len(rebalance_events),
+            "unique_symbols_traded": len(traded_symbols),
+            "total_filled_notional": total_filled_notional,
+            "avg_turnover": sum(turnovers) / len(turnovers) if turnovers else 0.0,
+            "max_turnover": max(turnovers, default=0.0),
+            "avg_open_positions": avg_open_positions,
+            "max_open_positions": max_open_positions,
+        }
+
     def _generate_results(self) -> BacktestResult:
         """Generate backtest results with full analytics."""
         from .result import BacktestResult
@@ -211,12 +340,14 @@ class Engine:
                 trades=[],
                 equity_curve=[],
                 fills=[],
+                predictions=self.feed.signals,
+                portfolio_state=[],
                 metrics={"skipped_bars": self._skipped_bars},
                 config=self.config,
             )
 
         # Build EquityCurve from raw data
-        equity = EquityCurve()
+        equity = EquityCurve.from_config(self.config)
         for ts, value in self.equity_curve:
             equity.append(ts, value)
 
@@ -228,7 +359,14 @@ class Engine:
             last_timestamp = self.equity_curve[-1][0]
             for asset, pos in self.broker.positions.items():
                 # Get last known price for this asset
-                last_price = self.broker._current_prices.get(asset, pos.entry_price)
+                last_price = (
+                    self.broker.get_mark_price(asset, quantity=pos.quantity) or pos.entry_price
+                )
+                entry_quote = pos.context.get("entry_quote_context", {})
+                exit_quote = self.broker.get_quote_context(
+                    asset,
+                    OrderSide.BUY if pos.quantity < 0 else OrderSide.SELL,
+                )
 
                 # Calculate mark-to-market PnL (include multiplier for futures)
                 pnl = (
@@ -250,19 +388,30 @@ class Engine:
                     pnl_percent=pnl_pct,
                     bars_held=pos.bars_held,
                     fees=pos.entry_commission,  # Only entry fees so far
-                    slippage=0.0,  # No exit slippage yet
+                    exit_slippage=0.0,  # No exit slippage yet
                     exit_reason="end_of_backtest",
                     status="open",
                     mfe=pos.max_favorable_excursion,
                     mae=pos.max_adverse_excursion,
                     entry_slippage=pos.entry_slippage,
                     multiplier=pos.multiplier,
+                    entry_quote_mid_price=entry_quote.get("quote_mid_price"),
+                    entry_bid_price=entry_quote.get("bid_price"),
+                    entry_ask_price=entry_quote.get("ask_price"),
+                    entry_spread=entry_quote.get("spread"),
+                    entry_available_size=entry_quote.get("available_size"),
+                    exit_quote_mid_price=exit_quote.get("quote_mid_price"),
+                    exit_bid_price=exit_quote.get("bid_price"),
+                    exit_ask_price=exit_quote.get("ask_price"),
+                    exit_spread=exit_quote.get("spread"),
+                    exit_available_size=exit_quote.get("available_size"),
                 )
                 all_trades.append(open_trade)
 
         # Build TradeAnalyzer (only on closed trades for accurate stats)
         closed_trades = [t for t in all_trades if t.status == "closed"]
         trade_analyzer = TradeAnalyzer(closed_trades)
+        activity_metrics = self._build_activity_metrics()
 
         # Build metrics dictionary (backward compatible)
         metrics = {
@@ -279,7 +428,7 @@ class Engine:
             "win_rate": trade_analyzer.win_rate,
             # Commission/slippage from fills (includes open positions)
             "total_commission": sum(f.commission for f in self.broker.fills),
-            "total_slippage": sum(f.slippage for f in self.broker.fills),
+            "total_slippage": sum(t.total_slippage_cost for t in all_trades),
             # Additional metrics
             "sharpe": equity.sharpe,
             "sortino": equity.sortino,
@@ -302,12 +451,16 @@ class Engine:
             "gross_profit_factor": trade_analyzer.gross_profit_factor,
             # Calendar enforcement
             "skipped_bars": self._skipped_bars,
+            # Activity and exposure summaries
+            **activity_metrics,
         }
 
         return BacktestResult(
             trades=all_trades,  # Includes both closed and open trades
             equity_curve=self.equity_curve,
             fills=self.broker.fills,
+            predictions=self.feed.signals,
+            portfolio_state=self.portfolio_state,
             metrics=metrics,
             config=self.config,
             equity=equity,
@@ -361,6 +514,8 @@ def run_backtest(
     context: pl.DataFrame | str | None = None,
     config: BacktestConfig | str | None = None,
     *,
+    feed_spec: Any | None = None,
+    contract: Any | None = None,
     contract_specs: dict[str, Any] | None = None,
     market_impact_model: Any | None = None,
     execution_limits: Any | None = None,
@@ -373,6 +528,8 @@ def run_backtest(
         signals: Optional signals DataFrame or path
         context: Optional context DataFrame or path
         config: BacktestConfig instance, preset name (str), or None for defaults
+        feed_spec: Optional shared dataset contract for schema and temporal metadata
+        contract: Alias for feed_spec
         contract_specs: Per-asset contract specifications (futures multipliers, etc.)
         market_impact_model: Market impact model for fill simulation
         execution_limits: Execution limits (max order size, etc.)
@@ -402,6 +559,8 @@ def run_backtest(
         prices_df=prices if isinstance(prices, pl.DataFrame) else None,
         signals_df=signals if isinstance(signals, pl.DataFrame) else None,
         context_df=context if isinstance(context, pl.DataFrame) else None,
+        feed_spec=feed_spec,
+        contract=contract,
     )
 
     if isinstance(config, str):

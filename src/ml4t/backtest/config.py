@@ -22,11 +22,14 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import yaml
+from ml4t.data.artifacts.base import serialize_artifact_value
+from ml4t.data.artifacts.market_data import FeedSpec, TimestampSemantics
 
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
 
@@ -34,10 +37,15 @@ from .types import ExecutionMode, StopFillMode, StopLevelBasis
 class ExecutionPrice(str, Enum):
     """Price used for order execution."""
 
+    PRICE = "price"  # Use FeedSpec.price_col / broker reference price
     CLOSE = "close"  # Use bar's close price
     OPEN = "open"  # Use bar's open price
     VWAP = "vwap"  # Volume-weighted average price (requires volume data)
     MID = "mid"  # (high + low) / 2
+    BID = "bid"  # Use best bid quote
+    ASK = "ask"  # Use best ask quote
+    QUOTE_MID = "quote_mid"  # Use quote midpoint
+    QUOTE_SIDE = "quote_side"  # Buy at ask / sell at bid
 
 
 class ShareType(str, Enum):
@@ -228,6 +236,47 @@ class InitialHwmSource(str, Enum):
     BAR_HIGH = "bar_high"  # Use bar's high (VBT Pro with OHLC)
 
 
+def _feed_spec_to_dict(feed_spec: FeedSpec) -> dict[str, Any]:
+    """Serialize feed metadata to plain Python data for config round-trips."""
+    return serialize_artifact_value(asdict(feed_spec))
+
+
+def _to_backtest_frequency(value: DataFrequency | Any | None) -> DataFrequency | None:
+    if value is None:
+        return None
+    if isinstance(value, DataFrequency):
+        return value
+    if isinstance(value, Enum):
+        value = value.value
+
+    normalized = str(value).strip().lower()
+    mapping = {
+        "daily": DataFrequency.DAILY,
+        "1d": DataFrequency.DAILY,
+        "d": DataFrequency.DAILY,
+        "weekly": DataFrequency.IRREGULAR,
+        "monthly": DataFrequency.IRREGULAR,
+        "minute": DataFrequency.MINUTE_1,
+        "1m": DataFrequency.MINUTE_1,
+        "1min": DataFrequency.MINUTE_1,
+        "5m": DataFrequency.MINUTE_5,
+        "5min": DataFrequency.MINUTE_5,
+        "5minute": DataFrequency.MINUTE_5,
+        "15m": DataFrequency.MINUTE_15,
+        "15min": DataFrequency.MINUTE_15,
+        "15minute": DataFrequency.MINUTE_15,
+        "30m": DataFrequency.MINUTE_30,
+        "30min": DataFrequency.MINUTE_30,
+        "30minute": DataFrequency.MINUTE_30,
+        "hour": DataFrequency.HOURLY,
+        "hourly": DataFrequency.HOURLY,
+        "1h": DataFrequency.HOURLY,
+        "tick": DataFrequency.IRREGULAR,
+        "second": DataFrequency.IRREGULAR,
+    }
+    return mapping.get(normalized, DataFrequency.IRREGULAR)
+
+
 class TrailStopTiming(str, Enum):
     """Timing of water mark update relative to trailing stop check.
 
@@ -318,6 +367,7 @@ class BacktestConfig:
 
     # === Execution Timing ===
     execution_price: ExecutionPrice = ExecutionPrice.OPEN
+    mark_price: ExecutionPrice = ExecutionPrice.PRICE
     execution_mode: ExecutionMode = ExecutionMode.NEXT_BAR  # Order execution timing
 
     # === Stop Configuration ===
@@ -497,6 +547,102 @@ class BacktestConfig:
 
     # === Metadata ===
     preset_name: str | None = None  # Name of preset this was loaded from
+    feed_spec: FeedSpec | None = field(default=None, repr=False, compare=False)
+    metadata: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    _explicit_timezone: bool = field(default=False, init=False, repr=False, compare=False)
+    _explicit_data_frequency: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def __new__(cls, *args: Any, **kwargs: Any):
+        instance = super().__new__(cls)
+        field_names = [name for name, value in cls.__dataclass_fields__.items() if value.init]
+        provided = set(kwargs)
+        provided.update(field_names[: len(args)])
+        instance._provided_init_fields = provided
+        return instance
+
+    def __post_init__(self) -> None:
+        provided = getattr(self, "_provided_init_fields", set())
+        self._explicit_timezone = "timezone" in provided
+        self._explicit_data_frequency = "data_frequency" in provided
+        if hasattr(self, "_provided_init_fields"):
+            delattr(self, "_provided_init_fields")
+        if self.feed_spec is None:
+            return
+
+        self.feed_spec = FeedSpec.from_any(self.feed_spec)
+        if self.calendar is None and self.feed_spec.calendar:
+            self.calendar = self.feed_spec.calendar
+        if not self._explicit_timezone and self.feed_spec.timezone:
+            self.timezone = self.feed_spec.timezone
+
+        spec_frequency = _to_backtest_frequency(self.feed_spec.data_frequency)
+        if not self._explicit_data_frequency and spec_frequency is not None:
+            self.data_frequency = spec_frequency
+
+    @property
+    def resolved_feed_spec(self) -> FeedSpec:
+        """Effective feed metadata after applying runtime config precedence."""
+        base = self.feed_spec if self.feed_spec is not None else FeedSpec()
+        return base.with_overrides(
+            calendar=self.calendar,
+            timezone=self.timezone,
+            data_frequency=self.data_frequency,
+        )
+
+    @property
+    def resolved_calendar(self) -> str | None:
+        return self.resolved_feed_spec.calendar
+
+    @property
+    def resolved_timezone(self) -> str:
+        """Effective runtime timezone with UTC fallback."""
+        return self.resolved_feed_spec.timezone or "UTC"
+
+    @property
+    def resolved_data_frequency(self) -> DataFrequency:
+        resolved_frequency = _to_backtest_frequency(self.resolved_feed_spec.data_frequency)
+        return resolved_frequency or self.data_frequency
+
+    @property
+    def resolved_session_start_time(self) -> str | None:
+        return self.resolved_feed_spec.session_start_time
+
+    @property
+    def resolved_timestamp_semantics(self) -> TimestampSemantics | None:
+        return self.resolved_feed_spec.timestamp_semantics
+
+    def merge_feed_spec(self, feed_spec: FeedSpec | Any | None) -> BacktestConfig:
+        """Fill missing runtime config from feed metadata without mutating user config."""
+        effective_feed_spec = self.feed_spec if self.feed_spec is not None else feed_spec
+        if effective_feed_spec is None:
+            return self
+
+        effective_feed_spec = FeedSpec.from_any(effective_feed_spec)
+        updates: dict[str, Any] = {"feed_spec": effective_feed_spec}
+        if self.calendar is None and effective_feed_spec.calendar:
+            updates["calendar"] = effective_feed_spec.calendar
+        if (
+            not self._explicit_timezone
+            and effective_feed_spec.timezone
+            and effective_feed_spec.timezone != self.timezone
+        ):
+            updates["timezone"] = effective_feed_spec.timezone
+
+        spec_frequency = _to_backtest_frequency(effective_feed_spec.data_frequency)
+        if (
+            not self._explicit_data_frequency
+            and spec_frequency is not None
+            and spec_frequency != self.data_frequency
+        ):
+            updates["data_frequency"] = spec_frequency
+
+        if len(updates) == 1 and self.feed_spec == effective_feed_spec:
+            return self
+
+        merged = replace(self, **updates)
+        merged._explicit_timezone = self._explicit_timezone
+        merged._explicit_data_frequency = self._explicit_data_frequency
+        return merged
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""
@@ -512,6 +658,7 @@ class BacktestConfig:
             },
             "execution": {
                 "execution_price": self.execution_price.value,
+                "mark_price": self.mark_price.value,
                 "execution_mode": self.execution_mode.value,
             },
             "stops": {
@@ -567,6 +714,8 @@ class BacktestConfig:
                 "data_frequency": self.data_frequency.value,
                 "enforce_sessions": self.enforce_sessions,
             },
+            "feed": _feed_spec_to_dict(self.resolved_feed_spec),
+            "metadata": serialize_artifact_value(self.metadata),
         }
 
     @classmethod
@@ -595,6 +744,8 @@ class BacktestConfig:
                 "settlement",
                 "orders",
                 "calendar",
+                "feed",
+                "metadata",
             }
             unknown_sections = set(data) - allowed_sections
             if unknown_sections:
@@ -610,7 +761,7 @@ class BacktestConfig:
                     "fixed_margin_schedule",
                     "short_cash_policy",
                 },
-                "execution": {"execution_price", "execution_mode"},
+                "execution": {"execution_price", "mark_price", "execution_mode"},
                 "stops": {
                     "stop_fill_mode",
                     "stop_level_basis",
@@ -645,8 +796,35 @@ class BacktestConfig:
                     "data_frequency",
                     "enforce_sessions",
                 },
+                "feed": {
+                    "timestamp_col",
+                    "entity_col",
+                    "price_col",
+                    "open_col",
+                    "high_col",
+                    "low_col",
+                    "close_col",
+                    "volume_col",
+                    "bid_col",
+                    "ask_col",
+                    "mid_col",
+                    "bid_size_col",
+                    "ask_size_col",
+                    "calendar",
+                    "timezone",
+                    "data_frequency",
+                    "bar_type",
+                    "timestamp_semantics",
+                    "session_start_time",
+                },
             }
             for section, cfg in data.items():
+                if section == "metadata":
+                    if not isinstance(cfg, dict):
+                        raise TypeError(
+                            f"Section 'metadata' must be a dict, got {type(cfg).__name__}"
+                        )
+                    continue
                 if not isinstance(cfg, dict):
                     raise TypeError(f"Section '{section}' must be a dict, got {type(cfg).__name__}")
                 unknown_keys = set(cfg) - allowed_keys_by_section[section]
@@ -665,6 +843,13 @@ class BacktestConfig:
         settle_cfg = data.get("settlement", {})
         order_cfg = data.get("orders", {})
         cal_cfg = data.get("calendar", {})
+        feed_cfg = data.get("feed", {})
+        metadata = data.get("metadata", {})
+
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise TypeError(f"Section 'metadata' must be a dict, got {type(metadata).__name__}")
 
         allow_short_selling = acct_cfg.get("allow_short_selling", False)
         allow_leverage = acct_cfg.get("allow_leverage", False)
@@ -680,6 +865,7 @@ class BacktestConfig:
             short_cash_policy=ShortCashPolicy(acct_cfg.get("short_cash_policy", "credit")),
             # Execution
             execution_price=ExecutionPrice(exec_cfg.get("execution_price", "open")),
+            mark_price=ExecutionPrice(exec_cfg.get("mark_price", "price")),
             execution_mode=ExecutionMode(exec_cfg.get("execution_mode", "next_bar")),
             # Stops
             stop_fill_mode=StopFillMode(stops_cfg.get("stop_fill_mode", "stop_price")),
@@ -730,6 +916,8 @@ class BacktestConfig:
             enforce_sessions=cal_cfg.get("enforce_sessions", False),
             # Metadata
             preset_name=preset_name,
+            feed_spec=FeedSpec.from_any(feed_cfg) if feed_cfg else None,
+            metadata=dict(metadata),
         )
 
     def to_yaml(self, path: str | Path) -> None:
@@ -794,6 +982,7 @@ class BacktestConfig:
                 "Execution:",
                 f"  Execution mode: {self.execution_mode.value}",
                 f"  Execution price: {self.execution_price.value}",
+                f"  Mark price: {self.mark_price.value}",
                 "",
                 "Stops:",
                 f"  Fill mode: {self.stop_fill_mode.value}",
