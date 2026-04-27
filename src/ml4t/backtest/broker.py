@@ -945,14 +945,19 @@ class Broker:
         return self._order_book.cancel_order(order_id)
 
     def close_position(
-        self, asset: str, _options: SubmitOrderOptions | None = None
+        self,
+        asset: str,
+        order_type: OrderType = OrderType.MARKET,
+        _options: SubmitOrderOptions | None = None,
     ) -> Order | None:
         """Close an open position for the given asset.
 
-        Submits a market order to fully close the position.
+        Submits an order to fully close the position.
 
         Args:
             asset: Asset symbol to close
+            order_type: Exit order type (default MARKET). Use `OrderType.MOC`
+                for market-on-close flattening.
 
         Returns:
             Order object if position exists and order submitted, None otherwise
@@ -960,11 +965,20 @@ class Broker:
         Example:
             # Close AAPL position
             order = broker.close_position("AAPL")
+
+            # Flatten at the bar close
+            order = broker.close_position("AAPL", order_type=OrderType.MOC)
         """
         pos = self.positions.get(asset)
         if pos and pos.quantity != 0:
             side = OrderSide.SELL if pos.quantity > 0 else OrderSide.BUY
-            return self.submit_order(asset, abs(pos.quantity), side, _options=_options)
+            return self.submit_order(
+                asset,
+                abs(pos.quantity),
+                side,
+                order_type=order_type,
+                _options=_options,
+            )
         return None
 
     # === Position Modification (P1 Features) ===
@@ -1661,7 +1675,13 @@ class Broker:
                     use_low_for_lwm=use_extremes,
                 )
 
-    def _process_orders(self, use_open: bool = False):
+    def _process_orders(
+        self,
+        use_open: bool = False,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ):
         """Process pending orders against current prices.
 
         Fill ordering is controlled by ``self.fill_ordering``:
@@ -1675,4 +1695,8 @@ class Broker:
         Args:
             use_open: If True, use open prices (for next-bar mode at bar start).
         """
-        self._execution_engine.process_orders(use_open=use_open)
+        self._execution_engine.process_orders(
+            use_open=use_open,
+            order_types=order_types,
+            include_orders_this_bar=include_orders_this_bar,
+        )

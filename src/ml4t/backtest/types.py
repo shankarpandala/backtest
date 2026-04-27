@@ -11,6 +11,7 @@ from typing import Any
 
 class OrderType(Enum):
     MARKET = "market"
+    MOC = "moc"
     LIMIT = "limit"
     STOP = "stop"
     STOP_LIMIT = "stop_limit"

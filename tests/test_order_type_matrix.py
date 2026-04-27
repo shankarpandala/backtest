@@ -37,6 +37,13 @@ def direction(request):
     return request.param
 
 
+class TestOrderTypeEnum:
+    """Verify enum round-trips for newly added order types."""
+
+    def test_moc_round_trip(self):
+        assert OrderType("moc") is OrderType.MOC
+
+
 # ---------------------------------------------------------------------------
 # Limit orders
 # ---------------------------------------------------------------------------
@@ -281,6 +288,54 @@ class TestStopFills:
         closed = [t for t in result.trades if t.status == "closed"]
         assert len(closed) == 1
         assert abs(closed[0].pnl - expected_pnl) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Market-on-close orders
+# ---------------------------------------------------------------------------
+
+
+class TestMocFills:
+    """Verify market-on-close orders fill at the session close."""
+
+    def test_moc_fills_at_close_in_next_bar_mode(self, direction):
+        config = BacktestConfig(
+            initial_cash=100_000.0,
+            commission_rate=0.0,
+            slippage_rate=0.0,
+            execution_mode=ExecutionMode.NEXT_BAR,
+            execution_price=ExecutionPrice.OPEN,
+            allow_short_selling=True,
+        )
+
+        if direction == "long":
+            bars = [
+                (100.0, 102.0, 99.0, 101.0),
+                (103.0, 104.0, 102.0, 103.0),
+                (104.0, 105.0, 103.0, 104.0),
+                (105.0, 106.0, 104.0, 105.0),
+            ]
+            expected_entry = 101.0
+        else:
+            bars = [
+                (100.0, 101.0, 97.0, 99.0),
+                (98.0, 99.0, 95.0, 96.0),
+                (95.0, 96.0, 93.0, 94.0),
+                (93.0, 94.0, 92.0, 93.0),
+            ]
+            expected_entry = 99.0
+
+        strategy = OrderTypeStrategy(
+            direction=direction,
+            order_type=OrderType.MOC,
+            entry_bar=0,
+            exit_bar=2,
+        )
+        result = _run(bars, strategy, config=config)
+
+        closed = [t for t in result.trades if t.status == "closed"]
+        assert len(closed) == 1
+        assert closed[0].entry_price == expected_entry
 
 
 # ---------------------------------------------------------------------------

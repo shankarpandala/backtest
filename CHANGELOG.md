@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.0b15 - 2026-04-27
+
+### Added
+
+- `OrderType.MOC` as a first-class market-on-close order primitive.
+- `Broker.close_position(..., order_type=...)` so positions can be flattened with
+  `OrderType.MOC` directly.
+
+### Changed
+
+- `MOC` orders now execute at the current bar's close instead of following the standard
+  `NEXT_BAR` market-order timing.
+- User docs now describe `MOC` order timing, daily-bar semantics, and position-closing
+  usage.
+
+### Validation
+
+- `uv run pytest tests/test_order_type_matrix.py tests/test_order_type_moc.py -q`
+- `uv run ruff check src/ml4t/backtest/broker.py src/ml4t/backtest/core/execution_engine.py src/ml4t/backtest/core/fill_engine.py src/ml4t/backtest/core/order_book.py src/ml4t/backtest/engine.py src/ml4t/backtest/types.py tests/test_order_type_matrix.py tests/test_order_type_moc.py`
+- `uv run python -m mkdocs build --strict`
+
 ## 0.1.0b13 - 2026-04-01
 
 ### Changed

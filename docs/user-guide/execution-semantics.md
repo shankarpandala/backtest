@@ -22,6 +22,9 @@ from ml4t.backtest.types import ExecutionMode
 config = BacktestConfig(execution_mode=ExecutionMode.NEXT_BAR)  # default
 ```
 
+`OrderType.MOC` is the exception. In `NEXT_BAR` mode, `MOC` orders submitted during
+`on_data()` still fill on the current bar, at the close, after strategy logic runs.
+
 ### SAME_BAR
 
 Orders fill at the **current bar's close** price, in the same bar they are submitted.
@@ -53,6 +56,9 @@ The `execution_price` parameter controls which price source is used for market o
 | `QUOTE_SIDE` | Ask for buys, bid for sells | Side-aware market execution |
 
 `PRICE` is the default mark source and follows your feed schema. If you map `price_col="mid_price"`, then both `bar["price"]` and `ExecutionPrice.PRICE` use that midpoint.
+
+`OrderType.MOC` does not use `execution_price`; it always fills at the current bar's
+close.
 
 ### Mark Price
 

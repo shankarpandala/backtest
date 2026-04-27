@@ -13,7 +13,7 @@ from .broker import Broker
 from .config import DataFrequency
 from .datafeed import DataFeed
 from .strategy import Strategy
-from .types import ExecutionMode, OrderSide
+from .types import ExecutionMode, OrderSide, OrderType
 
 if TYPE_CHECKING:
     from .config import BacktestConfig
@@ -223,7 +223,12 @@ class Engine:
                 self.broker._process_orders(use_open=True)
                 # Strategy generates new orders
                 self.strategy.on_data(timestamp, assets_data, context, self.broker)
-                # New orders will be processed next bar
+                # MOC orders are the one next-bar exception: they execute on the
+                # current session close after strategy logic runs.
+                self.broker._process_orders(
+                    order_types={OrderType.MOC},
+                    include_orders_this_bar=True,
+                )
             else:
                 # Same-bar mode: process before and after strategy
                 self.broker._process_orders()

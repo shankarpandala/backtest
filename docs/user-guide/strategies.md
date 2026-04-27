@@ -73,6 +73,9 @@ broker.submit_order("AAPL", 100, order_type=OrderType.STOP, stop_price=145.0)
 # Stop-limit order
 broker.submit_order("AAPL", 100, order_type=OrderType.STOP_LIMIT,
                     stop_price=145.0, limit_price=144.0)
+
+# Market-on-close order
+broker.submit_order("AAPL", 100, order_type=OrderType.MOC)
 ```
 
 ### Bracket Orders
@@ -111,6 +114,9 @@ cash = broker.get_cash()
 ```python
 # Close a specific position
 broker.close_position("AAPL")
+
+# Close at the current bar close
+broker.close_position("AAPL", order_type=OrderType.MOC)
 ```
 
 ### Rebalancing

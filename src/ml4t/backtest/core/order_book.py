@@ -234,7 +234,7 @@ class OrderBook:
         return (
             broker.execution_mode is ExecutionMode.NEXT_BAR
             and broker.next_bar_submission_precheck
-            and order.order_type is OrderType.MARKET
+            and order.order_type in {OrderType.MARKET, OrderType.MOC}
         )
 
     def _reset_submission_shadow_if_needed(self) -> None:
@@ -374,7 +374,10 @@ class OrderBook:
 
     def _should_apply_buying_power_reservation(self, order: Order) -> bool:
         broker = self.broker
-        return broker.buying_power_reservation and order.order_type is OrderType.MARKET
+        return (
+            broker.buying_power_reservation
+            and order.order_type in {OrderType.MARKET, OrderType.MOC}
+        )
 
     def _passes_buying_power_check(self, order: Order) -> bool:
         """LEAN-style buying power reservation at submission time.

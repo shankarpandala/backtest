@@ -16,6 +16,27 @@ broker.submit_order("AAPL", -100)
 
 In NEXT_BAR mode (default), market orders fill at the next bar's open. In SAME_BAR mode, they fill at the current bar's close.
 
+## Market-On-Close Orders
+
+Execute at the current session close.
+
+```python
+from ml4t.backtest.types import OrderType
+
+# Enter at the current bar close
+broker.submit_order("AAPL", 100, order_type=OrderType.MOC)
+
+# Flatten an open position at the current bar close
+broker.close_position("AAPL", order_type=OrderType.MOC)
+```
+
+`MOC` is the one order type that overrides standard `NEXT_BAR` timing. In `NEXT_BAR`
+mode, orders submitted during `on_data()` normally fill at the next bar's open, but
+`MOC` orders fill at the current bar's close after strategy logic finishes. In
+`SAME_BAR` mode, `MOC` also fills at the current bar's close.
+
+For daily bars, this models a market-on-close fill at the session close price.
+
 ## Limit Orders
 
 Execute only if price reaches the limit level:
@@ -121,6 +142,9 @@ See [Execution Semantics](execution-semantics.md#fill-ordering) for details.
 ```python
 # Close a single position
 broker.close_position("AAPL")
+
+# Close at the current session close
+broker.close_position("AAPL", order_type=OrderType.MOC)
 
 # Cancel a pending order by ID
 broker.cancel_order(order.id)

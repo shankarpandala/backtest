@@ -14,38 +14,63 @@ class ExecutionEngine:
     def __init__(self, broker):
         self.broker = broker
 
-    def process_orders(self, use_open: bool = False):
-        if self._should_use_next_bar_queue_shadow_validation(use_open):
+    def process_orders(
+        self,
+        use_open: bool = False,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ):
+        if self._should_use_next_bar_queue_shadow_validation(
+            use_open,
+            order_types=order_types,
+            include_orders_this_bar=include_orders_this_bar,
+        ):
             self._process_orders_next_bar_queue_shadow(use_open)
             return
 
         ordering = self.broker.fill_ordering.value
         if ordering == "exit_first":
-            self._process_orders_exit_first(use_open)
+            self._process_orders_exit_first(
+                use_open,
+                order_types=order_types,
+                include_orders_this_bar=include_orders_this_bar,
+            )
         elif ordering == "sequential":
-            self._process_orders_sequential(use_open)
+            self._process_orders_sequential(
+                use_open,
+                order_types=order_types,
+                include_orders_this_bar=include_orders_this_bar,
+            )
         else:
-            self._process_orders_fifo(use_open)
+            self._process_orders_fifo(
+                use_open,
+                order_types=order_types,
+                include_orders_this_bar=include_orders_this_bar,
+            )
 
     def _is_exit_order(self, order) -> bool:
         """Check if an order reduces an existing position without reversing."""
         return is_exit_order(order, self.broker.positions)
 
-    def _process_orders_exit_first(self, use_open: bool = False):
+    def _process_orders_exit_first(
+        self,
+        use_open: bool = False,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ):
         broker = self.broker
         fill = broker._fill_engine
         exit_orders = []
         entry_orders = []
-        eligible_orders = []
-        orders_this_bar_ids = broker._orders_this_bar_ids
+        eligible_orders = self._eligible_orders(
+            use_open,
+            order_types=order_types,
+            include_orders_this_bar=include_orders_this_bar,
+        )
 
-        for order in broker.pending_orders[:]:
-            if (
-                broker.execution_mode is ExecutionMode.NEXT_BAR
-                and order.order_id in orders_this_bar_ids
-            ):
-                continue
-            eligible_orders.append(order)
+        for order in eligible_orders:
             if self._is_exit_order(order):
                 exit_orders.append(order)
             else:
@@ -96,13 +121,21 @@ class ExecutionEngine:
 
         self._cleanup_filled_orders(filled_orders)
 
-    def _should_use_next_bar_queue_shadow_validation(self, use_open: bool) -> bool:
+    def _should_use_next_bar_queue_shadow_validation(
+        self,
+        use_open: bool,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ) -> bool:
         broker = self.broker
         if not (
             use_open
             and broker.execution_mode is ExecutionMode.NEXT_BAR
             and broker.next_bar_queue_shadow_validation
         ):
+            return False
+        if order_types is not None or include_orders_this_bar:
             return False
 
         current_bar_index = broker._bar_index
@@ -285,17 +318,19 @@ class ExecutionEngine:
 
         return shadow_cash
 
-    def _process_orders_fifo(self, use_open: bool = False):
+    def _process_orders_fifo(
+        self,
+        use_open: bool = False,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ):
         broker = self.broker
-        eligible_orders = []
-        orders_this_bar_ids = broker._orders_this_bar_ids
-        for order in broker.pending_orders[:]:
-            if (
-                broker.execution_mode is ExecutionMode.NEXT_BAR
-                and order.order_id in orders_this_bar_ids
-            ):
-                continue
-            eligible_orders.append(order)
+        eligible_orders = self._eligible_orders(
+            use_open,
+            order_types=order_types,
+            include_orders_this_bar=include_orders_this_bar,
+        )
 
         filled_orders: list = []
 
@@ -306,7 +341,13 @@ class ExecutionEngine:
 
         self._cleanup_filled_orders(filled_orders)
 
-    def _process_orders_sequential(self, use_open: bool = False):
+    def _process_orders_sequential(
+        self,
+        use_open: bool = False,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ):
         """Process orders in submission order without exit/entry separation.
 
         Each order is processed individually with mark-to-market after each fill,
@@ -322,15 +363,11 @@ class ExecutionEngine:
         """
         broker = self.broker
         fill = broker._fill_engine
-        eligible_orders = []
-        orders_this_bar_ids = broker._orders_this_bar_ids
-        for order in broker.pending_orders[:]:
-            if (
-                broker.execution_mode is ExecutionMode.NEXT_BAR
-                and order.order_id in orders_this_bar_ids
-            ):
-                continue
-            eligible_orders.append(order)
+        eligible_orders = self._eligible_orders(
+            use_open,
+            order_types=order_types,
+            include_orders_this_bar=include_orders_this_bar,
+        )
 
         filled_orders: list = []
         # When buying_power_reservation is on, the shadow already validated
@@ -523,6 +560,30 @@ class ExecutionEngine:
             and broker.next_bar_simple_cash_check
             and order.order_type is OrderType.MARKET
         )
+
+    def _eligible_orders(
+        self,
+        use_open: bool,
+        *,
+        order_types: set[OrderType] | None = None,
+        include_orders_this_bar: bool = False,
+    ) -> list:
+        broker = self.broker
+        eligible_orders = []
+        orders_this_bar_ids = broker._orders_this_bar_ids
+        for order in broker.pending_orders[:]:
+            if use_open and order.order_type is OrderType.MOC:
+                continue
+            if order_types is not None and order.order_type not in order_types:
+                continue
+            if (
+                broker.execution_mode is ExecutionMode.NEXT_BAR
+                and order.order_id in orders_this_bar_ids
+                and not include_orders_this_bar
+            ):
+                continue
+            eligible_orders.append(order)
+        return eligible_orders
 
     def _passes_simple_cash_check(self, order, fill_price: float) -> bool:
         broker = self.broker

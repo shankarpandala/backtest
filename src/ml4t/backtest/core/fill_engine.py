@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..config import ShareType
+from ..config import ExecutionPrice, ShareType
 from ..types import OrderSide, OrderType
 
 
@@ -96,6 +96,13 @@ class FillEngine:
 
     def get_fill_price_for_order(self, order, use_open: bool) -> float | None:
         broker = self.broker
+        if order.order_type is OrderType.MOC:
+            return broker.get_price_for_source(
+                ExecutionPrice.CLOSE,
+                order.asset,
+                side=order.side,
+                use_open=False,
+            )
         return broker.get_price_for_source(
             broker.execution_price,
             order.asset,
@@ -197,7 +204,7 @@ class FillEngine:
         low = broker._current_lows.get(order.asset, price)
         bar_open = broker._current_opens.get(order.asset, price)
 
-        if order.order_type == OrderType.MARKET:
+        if order.order_type in {OrderType.MARKET, OrderType.MOC}:
             return self.check_market_fill(order, price)
         if order.order_type == OrderType.LIMIT:
             return self.check_limit_fill(order, high, low)
