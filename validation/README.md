@@ -67,25 +67,6 @@ python validation/run_scenario.py --all
 python validation/run_scenario.py --dry-run
 ```
 
-### Individual scripts (legacy, in archived/scenarios_v1/)
-
-Each framework has 16 standalone scripts that can be run individually:
-
-```bash
-# VectorBT Pro
-source .venv-vectorbt-pro/bin/activate
-python validation/archived/scenarios_v1/vectorbt_pro/scenario_01_long_only.py
-
-# Backtrader
-.venv-backtrader/bin/python3 validation/archived/scenarios_v1/backtrader/scenario_01_long_only.py
-
-# VectorBT OSS
-.venv-vectorbt/bin/python3 validation/archived/scenarios_v1/vectorbt_oss/scenario_01_long_only.py
-
-# Zipline
-.venv-zipline/bin/python3 validation/archived/scenarios_v1/zipline/scenario_01_long_only.py
-```
-
 ### Large-scale benchmarks
 
 ```bash
@@ -131,9 +112,6 @@ validation/
 ├── run_all_benchmarks.py      # Framework benchmark loop
 ├── benchmark_suite.py         # Large-scale benchmark runner
 ├── run_full_validation.py     # Complete validation pipeline
-├── archived/
-│   ├── scenarios_v1/          # Original 64 standalone scripts (by framework)
-│   └── *.py                   # Debug/comparison one-offs
 ├── lean/                      # LEAN integration
 ├── trade_logs/                # Golden file CSVs (gitignored)
 └── nautilus/                  # Nautilus Trader evaluation
