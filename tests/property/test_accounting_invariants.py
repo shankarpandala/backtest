@@ -6,6 +6,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from ml4t.backtest import Broker, OrderSide
+from ml4t.backtest.config import ShareType
 from ml4t.backtest.models import NoCommission, NoSlippage
 
 
@@ -30,7 +31,12 @@ def _set_bar(broker: Broker, price: float) -> None:
 )
 def test_round_trip_pnl_reconciles_cash(entry: float, exit_: float, qty: float) -> None:
     initial_cash = 200_000.0
-    broker = Broker(initial_cash, NoCommission(), NoSlippage())
+    broker = Broker(
+        initial_cash,
+        NoCommission(),
+        NoSlippage(),
+        share_type=ShareType.FRACTIONAL,
+    )
 
     _set_bar(broker, entry)
     broker.submit_order("AAPL", qty, OrderSide.BUY)

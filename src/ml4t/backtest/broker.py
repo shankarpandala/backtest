@@ -77,7 +77,7 @@ class Broker:
         execution_limits: ExecutionLimits | None = None,
         market_impact_model: MarketImpactModel | None = None,
         contract_specs: dict[str, ContractSpec] | None = None,
-        share_type: ShareType = ShareType.FRACTIONAL,
+        share_type: ShareType = ShareType.INTEGER,
         fill_ordering: FillOrdering = FillOrdering.EXIT_FIRST,
         entry_order_priority: EntryOrderPriority = EntryOrderPriority.SUBMISSION,
         next_bar_submission_precheck: bool = False,
@@ -283,6 +283,7 @@ class Broker:
             PercentageCommission,
             PercentageSlippage,
             PerShareCommission,
+            SpreadSlippage,
             TieredCommission,
             VolumeShareSlippage,
         )
@@ -311,6 +312,12 @@ class Broker:
             slippage_model = PercentageSlippage(rate=config.slippage_rate)
         elif config.slippage_type == SlippageType.FIXED:
             slippage_model = FixedSlippage(amount=config.slippage_fixed)
+        elif config.slippage_type == SlippageType.SPREAD:
+            slippage_model = SpreadSlippage(
+                spread=config.slippage_spread,
+                asset_spreads=config.slippage_spread_by_asset,
+                convention=config.slippage_spread_convention.value,
+            )
         elif config.slippage_type == SlippageType.VOLUME_BASED:
             slippage_model = VolumeShareSlippage(impact_factor=config.slippage_rate)
         elif config.slippage_type == SlippageType.NONE:

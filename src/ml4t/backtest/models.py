@@ -174,6 +174,31 @@ class FixedSlippage:
         return self.amount
 
 
+class SpreadSlippage:
+    """Approximate bid-ask spread cost in currency units.
+
+    The model returns a per-unit price adjustment to be applied on top of the
+    configured execution price. By default, input values are treated as full
+    quoted spreads and converted to half-spread crossing cost per side.
+    """
+
+    def __init__(
+        self,
+        spread: float = 0.01,
+        asset_spreads: dict[str, float] | None = None,
+        convention: str = "full_spread",
+    ):
+        self.spread = spread
+        self.asset_spreads = asset_spreads or {}
+        self.convention = convention
+
+    def calculate(self, asset: str, quantity: float, price: float, volume: float | None) -> float:
+        spread = self.asset_spreads.get(asset, self.spread)
+        if self.convention == "full_spread":
+            return spread / 2.0
+        return spread
+
+
 class PercentageSlippage:
     """Slippage as percentage of price (per-unit price adjustment)."""
 

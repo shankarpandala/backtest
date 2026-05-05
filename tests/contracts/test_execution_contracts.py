@@ -6,7 +6,13 @@ import polars as pl
 import pytest
 from ml4t.specs.market_data import FeedSpec
 
-from ml4t.backtest.config import BacktestConfig, CommissionType, ExecutionPrice, SlippageType
+from ml4t.backtest.config import (
+    BacktestConfig,
+    CommissionType,
+    ExecutionPrice,
+    SlippageType,
+    SpreadConvention,
+)
 from ml4t.backtest.engine import run_backtest
 from ml4t.backtest.strategy import Strategy
 from ml4t.backtest.types import ExecutionMode
@@ -127,3 +133,36 @@ def test_same_bar_quote_side_execution_uses_ask_for_buys() -> None:
     assert result.trades[0].entry_price == 100.5
     assert result.trades[0].entry_ask_price == 100.5
     assert result.metrics["final_value"] == pytest.approx(100000.0 - 100.5 + 110.75)
+
+
+def test_spread_slippage_full_spread_uses_half_spread_per_side() -> None:
+    config = BacktestConfig(
+        execution_mode=ExecutionMode.SAME_BAR,
+        execution_price=ExecutionPrice.CLOSE,
+        commission_type=CommissionType.NONE,
+        slippage_type=SlippageType.SPREAD,
+        slippage_spread=0.20,
+        slippage_spread_convention=SpreadConvention.FULL_SPREAD,
+    )
+    result = run_backtest(prices=_prices(), strategy=_BuyOnce(), config=config)
+
+    assert result.trades
+    assert result.trades[0].entry_price == pytest.approx(100.10)
+    assert result.trades[0].entry_slippage == pytest.approx(0.10)
+
+
+def test_spread_slippage_asset_override_uses_configured_per_side_cost() -> None:
+    config = BacktestConfig(
+        execution_mode=ExecutionMode.SAME_BAR,
+        execution_price=ExecutionPrice.CLOSE,
+        commission_type=CommissionType.NONE,
+        slippage_type=SlippageType.SPREAD,
+        slippage_spread=0.20,
+        slippage_spread_by_asset={"AAPL": 0.04},
+        slippage_spread_convention=SpreadConvention.HALF_SPREAD,
+    )
+    result = run_backtest(prices=_prices(), strategy=_BuyOnce(), config=config)
+
+    assert result.trades
+    assert result.trades[0].entry_price == pytest.approx(100.04)
+    assert result.trades[0].entry_slippage == pytest.approx(0.04)

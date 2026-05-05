@@ -184,6 +184,7 @@ class SlippageType(str, Enum):
     NONE = "none"  # No slippage
     PERCENTAGE = "percentage"  # % of price
     FIXED = "fixed"  # Fixed dollar amount
+    SPREAD = "spread"  # Bid-ask spread approximation in currency units
     VOLUME_BASED = "volume_based"  # Based on trade size vs volume
 
 
@@ -234,6 +235,13 @@ class InitialHwmSource(str, Enum):
     FILL_PRICE = "fill_price"  # Use fill price (default, most frameworks)
     BAR_CLOSE = "bar_close"  # Use bar's close
     BAR_HIGH = "bar_high"  # Use bar's high (VBT Pro with OHLC)
+
+
+class SpreadConvention(str, Enum):
+    """Interpretation of user-provided spread values."""
+
+    FULL_SPREAD = "full_spread"  # Convert full quoted spread to half-spread per side
+    HALF_SPREAD = "half_spread"  # Treat provided value as per-side crossing cost
 
 
 def _feed_spec_to_dict(feed_spec: FeedSpec) -> dict[str, Any]:
@@ -426,6 +434,22 @@ class BacktestConfig:
                 "Verify this matches your broker's actual costs."
             )
 
+        if self.slippage_spread < 0:
+            issues.append(f"slippage_spread ({self.slippage_spread}) must be >= 0")
+
+        if any(spread < 0 for spread in self.slippage_spread_by_asset.values()):
+            issues.append("slippage_spread_by_asset values must all be >= 0")
+
+        if (
+            self.slippage_type == SlippageType.SPREAD
+            and self.slippage_spread == 0.0
+            and not self.slippage_spread_by_asset
+        ):
+            issues.append(
+                "slippage_type='spread' requires slippage_spread > 0 or "
+                "slippage_spread_by_asset entries."
+            )
+
         # Fractional shares warning for production
         if self.share_type == ShareType.FRACTIONAL and self.preset_name == "realistic":
             issues.append(
@@ -498,7 +522,7 @@ class BacktestConfig:
             return "cash"
 
     # === Position Sizing ===
-    share_type: ShareType = ShareType.FRACTIONAL
+    share_type: ShareType = ShareType.INTEGER
 
     # === Commission ===
     commission_type: CommissionType = CommissionType.PERCENTAGE
@@ -511,6 +535,9 @@ class BacktestConfig:
     slippage_type: SlippageType = SlippageType.PERCENTAGE
     slippage_rate: float = 0.001  # 0.1%
     slippage_fixed: float = 0.0  # $ per share (if fixed model)
+    slippage_spread: float = 0.0  # Quoted spread in currency units (if spread model)
+    slippage_spread_by_asset: dict[str, float] = field(default_factory=dict)
+    slippage_spread_convention: SpreadConvention = SpreadConvention.FULL_SPREAD
     stop_slippage_rate: float = 0.0  # Additional slippage for stop/risk exits (on top of normal)
 
     # === Cash Management ===
@@ -687,6 +714,9 @@ class BacktestConfig:
                 "model": self.slippage_type.value,
                 "rate": self.slippage_rate,
                 "fixed": self.slippage_fixed,
+                "spread": self.slippage_spread,
+                "spread_by_asset": self.slippage_spread_by_asset,
+                "spread_convention": self.slippage_spread_convention.value,
                 "stop_rate": self.stop_slippage_rate,
             },
             "cash": {
@@ -777,7 +807,15 @@ class BacktestConfig:
                 },
                 "position_sizing": {"share_type"},
                 "commission": {"model", "rate", "per_share", "per_trade", "minimum"},
-                "slippage": {"model", "rate", "fixed", "stop_rate"},
+                "slippage": {
+                    "model",
+                    "rate",
+                    "fixed",
+                    "spread",
+                    "spread_by_asset",
+                    "spread_convention",
+                    "stop_rate",
+                },
                 "cash": {"initial", "buffer_pct"},
                 "settlement": {"delay", "reduces_buying_power"},
                 "orders": {
@@ -857,6 +895,14 @@ class BacktestConfig:
             metadata = {}
         if not isinstance(metadata, dict):
             raise TypeError(f"Section 'metadata' must be a dict, got {type(metadata).__name__}")
+        spread_by_asset = slip_cfg.get("spread_by_asset", {})
+        if spread_by_asset is None:
+            spread_by_asset = {}
+        if not isinstance(spread_by_asset, dict):
+            raise TypeError(
+                f"Section 'slippage.spread_by_asset' must be a dict, got "
+                f"{type(spread_by_asset).__name__}"
+            )
 
         allow_short_selling = acct_cfg.get("allow_short_selling", False)
         allow_leverage = acct_cfg.get("allow_leverage", False)
@@ -881,7 +927,7 @@ class BacktestConfig:
             initial_hwm_source=InitialHwmSource(stops_cfg.get("initial_hwm_source", "fill_price")),
             trail_stop_timing=TrailStopTiming(stops_cfg.get("trail_stop_timing", "lagged")),
             # Sizing
-            share_type=ShareType(sizing_cfg.get("share_type", "fractional")),
+            share_type=ShareType(sizing_cfg.get("share_type", "integer")),
             # Commission
             commission_type=CommissionType(comm_cfg.get("model", "percentage")),
             commission_rate=comm_cfg.get("rate", 0.001),
@@ -892,6 +938,13 @@ class BacktestConfig:
             slippage_type=SlippageType(slip_cfg.get("model", "percentage")),
             slippage_rate=slip_cfg.get("rate", 0.001),
             slippage_fixed=slip_cfg.get("fixed", 0.0),
+            slippage_spread=slip_cfg.get("spread", 0.0),
+            slippage_spread_by_asset={
+                str(asset): float(spread) for asset, spread in spread_by_asset.items()
+            },
+            slippage_spread_convention=SpreadConvention(
+                slip_cfg.get("spread_convention", "full_spread")
+            ),
             stop_slippage_rate=slip_cfg.get("stop_rate", 0.0),
             # Cash
             initial_cash=cash_cfg.get("initial", 100000.0),
@@ -1005,7 +1058,13 @@ class BacktestConfig:
                 "",
                 "Costs:",
                 f"  Commission: {self.commission_type.value} @ {self.commission_rate:.2%}",
-                f"  Slippage: {self.slippage_type.value} @ {self.slippage_rate:.2%}",
+                (
+                    "  Slippage: "
+                    f"{self.slippage_type.value} default_spread={self.slippage_spread:.6f} "
+                    f"convention={self.slippage_spread_convention.value}"
+                    if self.slippage_type == SlippageType.SPREAD
+                    else f"  Slippage: {self.slippage_type.value} @ {self.slippage_rate:.2%}"
+                ),
             ]
         )
 

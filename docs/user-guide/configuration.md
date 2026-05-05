@@ -103,16 +103,19 @@ mark source.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `slippage_type` | SlippageType | PERCENTAGE | Model: NONE, PERCENTAGE, FIXED, VOLUME_BASED |
+| `slippage_type` | SlippageType | PERCENTAGE | Model: NONE, PERCENTAGE, FIXED, SPREAD, VOLUME_BASED |
 | `slippage_rate` | float | 0.001 | Rate for percentage model (0.1%) |
 | `slippage_fixed` | float | 0.0 | Fixed dollar amount per share |
+| `slippage_spread` | float | 0.0 | Spread in currency units for bar-only spread approximation |
+| `slippage_spread_by_asset` | dict[str, float] | `{}` | Optional per-asset spread overrides |
+| `slippage_spread_convention` | SpreadConvention | FULL_SPREAD | Interpret spread input as full spread or per-side cost |
 | `stop_slippage_rate` | float | 0.0 | Additional slippage for stop exits |
 
 ### Position Sizing
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `share_type` | ShareType | FRACTIONAL | FRACTIONAL or INTEGER |
+| `share_type` | ShareType | INTEGER | FRACTIONAL or INTEGER |
 
 ### Cash Management
 
@@ -359,6 +362,33 @@ This configuration:
 - marks inventory at midpoint
 - keeps commission separate
 - avoids layering synthetic slippage on top unless you explicitly want extra impact
+
+### Bar-Only Spread Approximation
+
+```python
+from ml4t.backtest.config import SlippageType, SpreadConvention
+
+config = BacktestConfig(
+    execution_price=ExecutionPrice.CLOSE,
+    slippage_type=SlippageType.SPREAD,
+    slippage_spread=0.02,  # $0.02 quoted spread
+    slippage_spread_convention=SpreadConvention.FULL_SPREAD,
+)
+```
+
+This configuration applies half the configured spread per side, so a buy at
+`100.00` fills at `100.01` and a sell at `100.00` fills at `99.99`.
+
+If your input value is already the per-side crossing cost, use:
+
+```python
+config = BacktestConfig(
+    slippage_type=SlippageType.SPREAD,
+    slippage_spread=0.01,
+    slippage_spread_convention=SpreadConvention.HALF_SPREAD,
+    slippage_spread_by_asset={"AAPL": 0.01, "MSFT": 0.015},
+)
+```
 
 ### Quote-Aware Equities
 

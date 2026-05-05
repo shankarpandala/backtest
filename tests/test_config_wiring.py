@@ -28,12 +28,14 @@ from ml4t.backtest.config import (
     ShareType,
     ShortCashPolicy,
     SlippageType,
+    SpreadConvention,
 )
 from ml4t.backtest.models import (
     CombinedCommission,
     NoCommission,
     NoSlippage,
     PerShareCommission,
+    SpreadSlippage,
     TieredCommission,
     VolumeShareSlippage,
 )
@@ -115,6 +117,10 @@ class TestShareType:
     def test_from_config_propagates_share_type(self):
         config = BacktestConfig(share_type=ShareType.INTEGER)
         broker = Broker.from_config(config)
+        assert broker.share_type == ShareType.INTEGER
+
+    def test_broker_constructor_defaults_to_integer_shares(self):
+        broker = _make_broker()
         assert broker.share_type == ShareType.INTEGER
 
 
@@ -380,6 +386,7 @@ class TestShortCashPolicy:
             allow_short_selling=True,
             allow_leverage=False,
             short_cash_policy=ShortCashPolicy.LOCK_NOTIONAL,
+            share_type=ShareType.FRACTIONAL,
             reject_on_insufficient_cash=True,
             partial_fills_allowed=True,
         )
@@ -698,13 +705,25 @@ class TestPresetRoundTrip:
     """Presets should produce correct field values."""
 
     @pytest.mark.parametrize(
-        "preset_name", ["default", "backtrader", "vectorbt", "zipline", "realistic"]
+        "preset_name", ["default", "fast", "backtrader", "vectorbt", "zipline", "realistic"]
     )
     def test_preset_creates_valid_config(self, preset_name):
         config = BacktestConfig.from_preset(preset_name)
         assert config.preset_name == preset_name
         assert isinstance(config.share_type, ShareType)
         assert isinstance(config.fill_ordering, FillOrdering)
+
+    def test_default_preset_values(self):
+        config = BacktestConfig.from_preset("default")
+        assert config.share_type == ShareType.INTEGER
+        assert config.fill_ordering == FillOrdering.EXIT_FIRST
+        assert config.reject_on_insufficient_cash is True
+
+    def test_fast_preset_values(self):
+        config = BacktestConfig.from_preset("fast")
+        assert config.share_type == ShareType.INTEGER
+        assert config.execution_mode == ExecutionMode.SAME_BAR
+        assert config.reject_on_insufficient_cash is False
 
     def test_backtrader_preset_values(self):
         config = BacktestConfig.from_preset("backtrader")
@@ -933,6 +952,9 @@ class TestFromDictDefaultParity:
         assert from_empty.share_type == default.share_type
         assert from_empty.commission_type == default.commission_type
         assert from_empty.slippage_type == default.slippage_type
+        assert from_empty.slippage_spread == default.slippage_spread
+        assert from_empty.slippage_spread_by_asset == default.slippage_spread_by_asset
+        assert from_empty.slippage_spread_convention == default.slippage_spread_convention
         assert from_empty.fill_ordering == default.fill_ordering
         assert from_empty.entry_order_priority == default.entry_order_priority
         assert from_empty.short_cash_policy == default.short_cash_policy
@@ -947,6 +969,9 @@ class TestFromDictDefaultParity:
         assert from_empty.allow_short_selling == default.allow_short_selling
         assert from_empty.allow_leverage == default.allow_leverage
         assert from_empty.settlement_delay == default.settlement_delay
+
+    def test_constructor_defaults_to_integer_shares(self):
+        assert BacktestConfig().share_type == ShareType.INTEGER
 
 
 class TestFeedSpecConfigResolution:
@@ -1105,6 +1130,20 @@ class TestConfigModelWiring:
         assert isinstance(broker.slippage_model, VolumeShareSlippage)
         assert broker.slippage_model.impact_factor == 0.25
 
+    def test_spread_slippage_maps_to_spread_slippage(self):
+        broker = Broker.from_config(
+            BacktestConfig(
+                slippage_type=SlippageType.SPREAD,
+                slippage_spread=0.04,
+                slippage_spread_by_asset={"AAPL": 0.02},
+                slippage_spread_convention=SpreadConvention.HALF_SPREAD,
+            )
+        )
+        assert isinstance(broker.slippage_model, SpreadSlippage)
+        assert broker.slippage_model.spread == 0.04
+        assert broker.slippage_model.asset_spreads == {"AAPL": 0.02}
+        assert broker.slippage_model.convention == "half_spread"
+
     def test_per_share_commission_still_maps_correctly(self):
         broker = Broker.from_config(
             BacktestConfig(
@@ -1115,3 +1154,20 @@ class TestConfigModelWiring:
         )
         assert isinstance(broker.commission_model, PerShareCommission)
         assert broker.commission_model.per_share == 0.01
+
+    def test_spread_slippage_roundtrip_preserves_asset_map(self):
+        config = BacktestConfig(
+            slippage_type=SlippageType.SPREAD,
+            slippage_spread=0.05,
+            slippage_spread_by_asset={"AAPL": 0.03, "MSFT": 0.04},
+            slippage_spread_convention=SpreadConvention.FULL_SPREAD,
+        )
+        restored = BacktestConfig.from_dict(config.to_dict())
+        assert restored.slippage_type == SlippageType.SPREAD
+        assert restored.slippage_spread == 0.05
+        assert restored.slippage_spread_by_asset == {"AAPL": 0.03, "MSFT": 0.04}
+        assert restored.slippage_spread_convention == SpreadConvention.FULL_SPREAD
+
+    def test_spread_slippage_validation_requires_configured_spread(self):
+        issues = BacktestConfig(slippage_type=SlippageType.SPREAD).validate(warn=False)
+        assert any("slippage_type='spread' requires" in issue for issue in issues)

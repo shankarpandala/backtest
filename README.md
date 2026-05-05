@@ -197,6 +197,7 @@ Use top-level `feed` in `BacktestConfig` for generic feed semantics and top-leve
 
 ```python
 from ml4t.backtest import BacktestConfig, CommissionType
+from ml4t.backtest.config import SlippageType, SpreadConvention
 
 config = BacktestConfig(
     commission_rate=0.001,         # 10 bps percentage
@@ -209,6 +210,13 @@ config = BacktestConfig(
     commission_type=CommissionType.PER_SHARE,
     commission_per_share=0.005,
     commission_minimum=1.0,
+)
+
+# Or bar-only spread approximation in currency units
+config = BacktestConfig(
+    slippage_type=SlippageType.SPREAD,
+    slippage_spread=0.02,
+    slippage_spread_convention=SpreadConvention.FULL_SPREAD,
 )
 ```
 

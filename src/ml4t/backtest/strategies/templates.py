@@ -26,7 +26,7 @@ def _use_fractional(allow_fractional: bool | None, broker: Broker) -> bool:
     """Resolve fractional share setting from strategy override or broker config."""
     if allow_fractional is not None:
         return allow_fractional
-    return getattr(broker, "share_type", ShareType.FRACTIONAL) == ShareType.FRACTIONAL
+    return getattr(broker, "share_type", ShareType.INTEGER) == ShareType.FRACTIONAL
 
 
 class SignalFollowingStrategy(Strategy):

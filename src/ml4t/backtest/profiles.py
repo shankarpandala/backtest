@@ -21,7 +21,7 @@ DEFAULT_PROFILE = {
         "trail_stop_timing": "lagged",
     },
     "position_sizing": {
-        "share_type": "fractional",
+        "share_type": "integer",
     },
     "commission": {
         "model": "percentage",
@@ -317,7 +317,7 @@ FAST_PROFILE = {
         "trail_stop_timing": "lagged",
     },
     "position_sizing": {
-        "share_type": "fractional",
+        "share_type": "integer",
     },
     "commission": {
         "model": "none",

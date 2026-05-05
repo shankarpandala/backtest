@@ -7,7 +7,7 @@ Realistic backtesting requires modeling the costs of executing trades. ml4t-back
 | Layer | What It Models | Config |
 |-------|---------------|--------|
 | **Commission** | Broker fees | `commission_type`, `commission_rate` |
-| **Slippage** | Bid-ask spread crossing | `slippage_type`, `slippage_rate` |
+| **Slippage** | Spread crossing or synthetic execution drag | `slippage_type`, `slippage_rate` |
 | **Market impact** | Price movement from your order | `market_impact_model=` kwarg |
 
 Commission and slippage are configured via BacktestConfig. Market impact is an optional model passed to the Engine.
@@ -64,7 +64,7 @@ tiered = TieredCommission(tiers=[
 # Combined (base + percentage)
 combined = CombinedCommission(
     fixed=1.0,        # $1 base
-    per_share=0.005,  # Plus $0.005/share
+    percentage=0.0005,  # Plus 5 bps of notional
 )
 ```
 
@@ -93,6 +93,39 @@ config = BacktestConfig(
     slippage_fixed=0.01,  # $0.01 per share
 )
 ```
+
+### Spread
+
+Use this when you only have bars and want to approximate bid-ask crossing in
+currency units.
+
+```python
+from ml4t.backtest.config import SlippageType, SpreadConvention
+
+config = BacktestConfig(
+    slippage_type=SlippageType.SPREAD,
+    slippage_spread=0.02,  # $0.02 quoted spread
+    slippage_spread_convention=SpreadConvention.FULL_SPREAD,
+)
+```
+
+`FULL_SPREAD` means the configured value is the quoted bid-ask spread, so the
+engine applies half-spread per side. `HALF_SPREAD` means the configured value is
+already the per-side crossing cost.
+
+For asset-specific assumptions:
+
+```python
+config = BacktestConfig(
+    slippage_type=SlippageType.SPREAD,
+    slippage_spread=0.02,
+    slippage_spread_by_asset={"AAPL": 0.01, "MSFT": 0.015},
+    slippage_spread_convention=SpreadConvention.HALF_SPREAD,
+)
+```
+
+If you already have bid/ask quotes, prefer `execution_price=QUOTE_SIDE` and keep
+synthetic spread slippage disabled unless you explicitly want additional impact.
 
 ## Market Impact Models
 

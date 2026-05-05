@@ -8,10 +8,10 @@ Profiles are pre-configured `BacktestConfig` settings that replicate the exact b
 
 | Profile | Description |
 |---------|-------------|
-| `default` | Sensible defaults for general use |
-| `fast` | Zero-cost, no validation -- fastest possible execution |
+| `default` | Sensible defaults for general use with integer-share execution |
+| `fast` | Zero-cost, integer-share execution -- fastest possible execution |
 | `backtrader` | Match Backtrader's default behavior |
-| `vectorbt` | Match VectorBT's default behavior |
+| `vectorbt` | Match VectorBT's default behavior (including fractional shares) |
 | `zipline` | Match Zipline Reloaded's default behavior |
 | `lean` | Match QuantConnect LEAN's default behavior |
 | `realistic` | Conservative settings for production |
@@ -78,7 +78,7 @@ Profiles define behavioral defaults. Quote-aware feeds layer on top of them: you
 |---------|---------|-----------|----------|---------|------|-----------|
 | Short selling | No | Yes (margin) | Yes | No | Yes | No |
 | Leverage | No | Yes (50%) | No | No | No | No |
-| Share type | fractional | integer | fractional | integer | integer | integer |
+| Share type | integer | integer | fractional | integer | integer | integer |
 
 ### Costs
 

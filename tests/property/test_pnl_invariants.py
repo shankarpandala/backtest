@@ -17,6 +17,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from ml4t.backtest import Broker, OrderSide
+from ml4t.backtest.config import ShareType
 from ml4t.backtest.models import NoCommission, NoSlippage, PercentageCommission
 
 
@@ -64,6 +65,7 @@ def test_cash_conservation(entry: float, exit_: float, qty: float, direction: st
         NoSlippage(),
         allow_short_selling=True,
         allow_leverage=True,
+        share_type=ShareType.FRACTIONAL,
     )
 
     entry_side = OrderSide.BUY if direction == "long" else OrderSide.SELL
