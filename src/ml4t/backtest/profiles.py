@@ -419,6 +419,34 @@ _ALIASES = {
 
 _CORE_PROFILE_NAMES = ["backtrader", "default", "lean", "realistic", "vectorbt", "zipline"]
 
+_BROKER_ALIASES = {
+    "ibkr": "ibkr",
+    "interactive_brokers": "ibkr",
+    "interactivebrokers": "ibkr",
+}
+
+_REGION_ALIASES = {
+    "us": "us",
+    "usa": "us",
+}
+
+_ASSET_CLASS_ALIASES = {
+    "stocks": "stocks",
+    "equities": "stocks",
+}
+
+_PLAN_ALIASES = {
+    "fixed": "fixed",
+}
+
+_ASSUMPTION_PRESETS = {
+    ("ibkr", "us", "stocks", "fixed"): "ibkr_us_stocks_fixed",
+}
+
+
+def _normalize_component(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
 
 def get_profile_config(name: str) -> dict:
     """Return a deep copy of nested config data for the named profile."""
@@ -432,3 +460,31 @@ def get_profile_config(name: str) -> dict:
 def list_profiles() -> list[str]:
     """List canonical preset names."""
     return _CORE_PROFILE_NAMES.copy()
+
+
+def get_assumption_preset(
+    *,
+    broker: str,
+    region: str,
+    asset_class: str,
+    plan: str,
+) -> str:
+    """Resolve structured broker assumptions to a canonical preset name."""
+    broker_key = _BROKER_ALIASES.get(_normalize_component(broker))
+    region_key = _REGION_ALIASES.get(_normalize_component(region))
+    asset_class_key = _ASSET_CLASS_ALIASES.get(_normalize_component(asset_class))
+    plan_key = _PLAN_ALIASES.get(_normalize_component(plan))
+
+    if None in (broker_key, region_key, asset_class_key, plan_key):
+        raise ValueError(
+            "Unknown broker assumptions. Supported combinations currently include "
+            "broker='ibkr', region='us', asset_class='stocks', plan='fixed'."
+        )
+
+    key = (broker_key, region_key, asset_class_key, plan_key)
+    if key not in _ASSUMPTION_PRESETS:
+        raise ValueError(
+            "Unsupported broker assumptions combination: "
+            f"broker={broker!r}, region={region!r}, asset_class={asset_class!r}, plan={plan!r}"
+        )
+    return _ASSUMPTION_PRESETS[key]

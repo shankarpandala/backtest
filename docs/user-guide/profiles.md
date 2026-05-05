@@ -55,6 +55,14 @@ from ml4t.backtest import BacktestConfig
 # Load a profile
 config = BacktestConfig.from_preset("backtrader")
 
+# Or build from structured broker assumptions
+config = BacktestConfig.from_assumptions(
+    broker="ibkr",
+    region="us",
+    asset_class="stocks",
+    plan="fixed",
+)
+
 # Use with run_backtest
 from ml4t.backtest import run_backtest
 result = run_backtest(prices, strategy, config="zipline")

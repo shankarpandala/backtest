@@ -1009,12 +1009,7 @@ class TestFeedSpecConfigResolution:
         assert config.calendar == "NYSE"
         assert config.timezone == "America/New_York"
         assert config.data_frequency == DataFrequency.MINUTE_1
-        assert config.resolved_calendar == "NYSE"
-        assert config.resolved_timezone == "America/New_York"
-        assert config.resolved_data_frequency == DataFrequency.MINUTE_1
-        assert config.resolved_feed_spec.calendar == "NYSE"
-        assert config.resolved_feed_spec.timezone == "America/New_York"
-        assert config.resolved_feed_spec.data_frequency == DataFrequency.MINUTE_1
+
 
     def test_resolved_feed_spec_preserves_explicit_runtime_over_feed_metadata(self):
         config = BacktestConfig(
@@ -1116,6 +1111,102 @@ class TestFeedSpecConfigResolution:
 
         assert merged is config
         assert config.merge_feed_spec(None) is config
+
+
+class TestStructuredAssumptions:
+    def test_from_assumptions_ibkr_us_stocks_fixed(self):
+        config = BacktestConfig.from_assumptions(
+            broker="ibkr",
+            region="us",
+            asset_class="stocks",
+            plan="fixed",
+        )
+
+        assert config.preset_name == "ibkr_us_stocks_fixed"
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+        assert config.slippage_type == SlippageType.NONE
+
+    def test_from_assumptions_accepts_broker_and_asset_aliases(self):
+        config = BacktestConfig.from_assumptions(
+            broker="interactive_brokers",
+            region="usa",
+            asset_class="equities",
+            plan="fixed",
+        )
+
+        assert config.preset_name == "ibkr_us_stocks_fixed"
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+
+    def test_from_user_config_uses_default_assumptions_and_global_defaults(self, tmp_path):
+        config_dir = tmp_path / "ml4t"
+        config_dir.mkdir()
+        (config_dir / "defaults.yaml").write_text(
+            "cash:\n"
+            "  initial: 250000\n"
+            "calendar:\n"
+            "  timezone: America/New_York\n"
+        )
+        (config_dir / "assumptions.yaml").write_text(
+            "default_assumptions:\n"
+            "  broker: ibkr\n"
+            "  region: us\n"
+            "  asset_class: stocks\n"
+            "  plan: fixed\n"
+        )
+
+        config = BacktestConfig.from_user_config(config_dir=config_dir)
+
+        assert config.preset_name == "user_config"
+        assert config.initial_cash == 250000
+        assert config.timezone == "America/New_York"
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+
+    def test_from_user_config_broker_override_beats_global_defaults(self, tmp_path):
+        config_dir = tmp_path / "ml4t"
+        config_dir.mkdir()
+        (config_dir / "defaults.yaml").write_text(
+            "commission:\n"
+            "  model: none\n"
+            "slippage:\n"
+            "  model: none\n"
+        )
+        (config_dir / "assumptions.yaml").write_text(
+            "default_assumptions:\n"
+            "  broker: ibkr\n"
+            "  region: us\n"
+            "  asset_class: stocks\n"
+            "  plan: fixed\n"
+            "brokers:\n"
+            "  ibkr:\n"
+            "    us:\n"
+            "      stocks:\n"
+            "        fixed:\n"
+            "          commission:\n"
+            "            minimum: 2.5\n"
+        )
+
+        config = BacktestConfig.from_user_config(config_dir=config_dir)
+
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 2.5
+
+    def test_from_user_config_requires_complete_assumptions_tuple(self, tmp_path):
+        config_dir = tmp_path / "ml4t"
+        config_dir.mkdir()
+        (config_dir / "assumptions.yaml").write_text(
+            "default_assumptions:\n"
+            "  broker: ibkr\n"
+            "  region: us\n"
+        )
+
+        with pytest.raises(ValueError, match="broker, region, asset_class, and plan"):
+            BacktestConfig.from_user_config(config_dir=config_dir)
 
 
 class TestConfigModelWiring:

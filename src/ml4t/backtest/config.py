@@ -22,6 +22,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -32,6 +33,36 @@ from ml4t.specs.base import serialize_artifact_value
 from ml4t.specs.market_data import FeedSpec, TimestampSemantics
 
 from .types import ExecutionMode, StopFillMode, StopLevelBasis
+
+
+def _deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge two dicts without mutating either input."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise TypeError(f"Expected mapping in {path}, got {type(data).__name__}")
+    return data
+
+
+def _resolve_user_config_dir(config_dir: str | Path | None) -> Path:
+    if config_dir is not None:
+        return Path(config_dir)
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_home:
+        return Path(xdg_home) / "ml4t" / "backtest"
+    return Path.home() / ".config" / "ml4t" / "backtest"
 
 
 class ExecutionPrice(str, Enum):
@@ -1015,6 +1046,141 @@ class BacktestConfig:
 
         profile_data = get_profile_config(preset)
         return cls.from_dict(profile_data, preset_name=preset, strict=True)
+
+    @classmethod
+    def from_assumptions(
+        cls,
+        *,
+        broker: str,
+        region: str,
+        asset_class: str,
+        plan: str,
+        overrides: dict[str, Any] | None = None,
+        **config_overrides: Any,
+    ) -> BacktestConfig:
+        """Build config from structured broker assumptions plus explicit overrides."""
+        from .profiles import get_assumption_preset, get_profile_config
+
+        preset = get_assumption_preset(
+            broker=broker,
+            region=region,
+            asset_class=asset_class,
+            plan=plan,
+        )
+        config_data = get_profile_config(preset)
+        if overrides:
+            config_data = _deep_merge_dicts(config_data, overrides)
+        config = cls.from_dict(config_data, preset_name=preset, strict=True)
+        if config_overrides:
+            config = replace(config, **config_overrides)
+        return config
+
+    @classmethod
+    def from_user_config(
+        cls,
+        *,
+        config_dir: str | Path | None = None,
+        broker: str | None = None,
+        region: str | None = None,
+        asset_class: str | None = None,
+        plan: str | None = None,
+        **config_overrides: Any,
+    ) -> BacktestConfig:
+        """Load config using layered user defaults and optional broker assumptions."""
+        config_root = _resolve_user_config_dir(config_dir)
+        defaults_path = config_root / "defaults.yaml"
+        assumptions_path = config_root / "assumptions.yaml"
+
+        defaults_data = _load_yaml_mapping(defaults_path)
+        assumptions_data = _load_yaml_mapping(assumptions_path)
+
+        default_assumptions = assumptions_data.get("default_assumptions", {})
+        if default_assumptions and not isinstance(default_assumptions, dict):
+            raise TypeError(
+                f"Expected mapping for default_assumptions in {assumptions_path}, "
+                f"got {type(default_assumptions).__name__}"
+            )
+
+        effective_broker = broker or default_assumptions.get("broker")
+        effective_region = region or default_assumptions.get("region")
+        effective_asset_class = asset_class or default_assumptions.get("asset_class")
+        effective_plan = plan or default_assumptions.get("plan")
+
+        provided_components = [
+            effective_broker,
+            effective_region,
+            effective_asset_class,
+            effective_plan,
+        ]
+        if any(value is not None for value in provided_components) and not all(
+            value is not None for value in provided_components
+        ):
+            raise ValueError(
+                "Broker assumptions must specify broker, region, asset_class, and plan together."
+            )
+
+        merged_data: dict[str, Any] = {}
+
+        if all(value is not None for value in provided_components):
+            from .profiles import get_assumption_preset, get_profile_config
+
+            preset = get_assumption_preset(
+                broker=effective_broker,
+                region=effective_region,
+                asset_class=effective_asset_class,
+                plan=effective_plan,
+            )
+            merged_data = _deep_merge_dicts(merged_data, get_profile_config(preset))
+            defaults_without_commission = {
+                key: value for key, value in defaults_data.items() if key != "commission"
+            }
+            merged_data = _deep_merge_dicts(merged_data, defaults_without_commission)
+
+            profile_overrides = assumptions_data.get("profiles", {})
+            if profile_overrides and not isinstance(profile_overrides, dict):
+                raise TypeError(
+                    f"Expected mapping for profiles in {assumptions_path}, "
+                    f"got {type(profile_overrides).__name__}"
+                )
+            preset_override = profile_overrides.get(preset, {})
+            if preset_override:
+                if not isinstance(preset_override, dict):
+                    raise TypeError(
+                        f"Expected mapping for profiles.{preset} in {assumptions_path}, "
+                        f"got {type(preset_override).__name__}"
+                    )
+                merged_data = _deep_merge_dicts(merged_data, preset_override)
+
+            broker_tree = assumptions_data.get("brokers", {})
+            if broker_tree and not isinstance(broker_tree, dict):
+                raise TypeError(
+                    f"Expected mapping for brokers in {assumptions_path}, "
+                    f"got {type(broker_tree).__name__}"
+                )
+            node: Any = broker_tree
+            for key in (
+                str(effective_broker),
+                str(effective_region),
+                str(effective_asset_class),
+                str(effective_plan),
+            ):
+                if not isinstance(node, dict):
+                    node = {}
+                    break
+                node = node.get(key, {})
+            if node:
+                if not isinstance(node, dict):
+                    raise TypeError(
+                        "Expected broker-specific override to be a mapping in "
+                        f"{assumptions_path}"
+                    )
+                merged_data = _deep_merge_dicts(merged_data, node)
+        else:
+            merged_data = _deep_merge_dicts(merged_data, defaults_data)
+        config = cls.from_dict(merged_data, preset_name="user_config", strict=False)
+        if config_overrides:
+            config = replace(config, **config_overrides)
+        return config
 
     def describe(self) -> str:
         """Return human-readable description of configuration."""

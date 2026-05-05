@@ -21,6 +21,17 @@ config = BacktestConfig()
 # From a framework preset
 config = BacktestConfig.from_preset("backtrader")
 
+# From structured broker assumptions
+config = BacktestConfig.from_assumptions(
+    broker="ibkr",
+    region="us",
+    asset_class="stocks",
+    plan="fixed",
+)
+
+# From layered user config
+config = BacktestConfig.from_user_config()
+
 # From a YAML file
 config = BacktestConfig.from_yaml("config/my_strategy.yaml")
 
@@ -29,6 +40,78 @@ config = BacktestConfig.from_preset("backtrader")
 config.commission_rate = 0.002
 config.initial_cash = 500_000
 ```
+
+## Structured Assumptions
+
+Broker and asset-class assumptions are separate from strategy logic.
+
+Use structured inputs when you want broker-specific fees without hiding them in
+generic defaults:
+
+```python
+config = BacktestConfig.from_assumptions(
+    broker="ibkr",
+    region="us",
+    asset_class="stocks",
+    plan="fixed",
+    slippage_type=SlippageType.NONE,
+)
+```
+
+This currently resolves to the `ibkr_us_stocks_fixed` preset.
+
+## User Config Directory
+
+For personal defaults that apply across strategies, use a config directory:
+
+- `~/.config/ml4t/backtest/defaults.yaml`
+- `~/.config/ml4t/backtest/assumptions.yaml`
+
+Load it with:
+
+```python
+config = BacktestConfig.from_user_config()
+```
+
+Recommended layout:
+
+```yaml
+# defaults.yaml
+cash:
+  initial: 250000
+calendar:
+  timezone: America/New_York
+slippage:
+  model: none
+```
+
+```yaml
+# assumptions.yaml
+default_assumptions:
+  broker: ibkr
+  region: us
+  asset_class: stocks
+  plan: fixed
+
+brokers:
+  ibkr:
+    us:
+      stocks:
+        fixed:
+          commission:
+            minimum: 1.0
+```
+
+Layering order:
+
+1. library neutral defaults
+2. selected broker/asset-class preset
+3. user global defaults from `defaults.yaml`
+4. user broker-specific overrides from `assumptions.yaml`
+5. explicit per-run keyword overrides
+
+Broker assumptions currently own commission defaults. Slippage remains a
+separate assumption layer.
 
 ## Parameter Reference
 
