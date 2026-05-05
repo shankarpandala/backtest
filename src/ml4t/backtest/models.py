@@ -44,7 +44,7 @@ class PercentageCommission:
 class PerShareCommission:
     """Fixed commission per share with optional minimum."""
 
-    def __init__(self, per_share: float = 0.005, minimum: float = 1.0):
+    def __init__(self, per_share: float = 0.0, minimum: float = 0.0):
         self.per_share = per_share
         self.minimum = minimum
 

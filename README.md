@@ -253,9 +253,9 @@ class WeightStrategy(Strategy):
 `RebalanceConfig` defaults both `min_trade_value` and `min_weight_change` to
 `0.0`, so these filters are opt-in.
 
-`BacktestConfig()` defaults to an IBKR-style fixed-share commission anchor
-(`$0.005/share`, `$1.00` minimum) and `slippage_type=NONE`. Synthetic slippage
-and other cost models are opt-in.
+`BacktestConfig()` defaults to neutral costs: `commission_type=NONE` and
+`slippage_type=NONE`. Broker-specific fee models and synthetic slippage are
+opt-in.
 
 ## Cross-Framework Validation
 

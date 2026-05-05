@@ -84,7 +84,7 @@ Profiles define behavioral defaults. Quote-aware feeds layer on top of them: you
 
 | Setting | default | backtrader | vectorbt | zipline | lean | realistic |
 |---------|---------|-----------|----------|---------|------|-----------|
-| Commission | $0.005/share, $1 min | 0.1% | none | $0.005/share | $0.005/share | 0.2% |
+| Commission | none | 0.1% | none | $0.005/share | $0.005/share | 0.2% |
 | Slippage | none | 0.1% | none | 10% volume | 0.1% | 0.2% |
 | Stop slippage | 0 | 0 | 0 | 0 | 0 | 0.1% |
 | Cash buffer | 0% | 0% | 0% | 0% | 0% | 2% |

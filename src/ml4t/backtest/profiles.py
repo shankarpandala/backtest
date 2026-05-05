@@ -24,10 +24,10 @@ DEFAULT_PROFILE = {
         "share_type": "integer",
     },
     "commission": {
-        "model": "per_share",
+        "model": "none",
         "rate": 0.0,
-        "per_share": 0.005,
-        "minimum": 1.0,
+        "per_share": 0.0,
+        "minimum": 0.0,
     },
     "slippage": {
         "model": "none",

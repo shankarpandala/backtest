@@ -525,11 +525,11 @@ class BacktestConfig:
     share_type: ShareType = ShareType.INTEGER
 
     # === Commission ===
-    commission_type: CommissionType = CommissionType.PER_SHARE
+    commission_type: CommissionType = CommissionType.NONE
     commission_rate: float = 0.0  # % of trade value (if percentage model)
-    commission_per_share: float = 0.005  # $ per share (if per_share model)
+    commission_per_share: float = 0.0  # $ per share (if per_share model)
     commission_per_trade: float = 0.0  # $ per trade (if per_trade model)
-    commission_minimum: float = 1.0  # Minimum commission per trade
+    commission_minimum: float = 0.0  # Minimum commission per trade
 
     # === Slippage ===
     slippage_type: SlippageType = SlippageType.NONE
@@ -929,11 +929,11 @@ class BacktestConfig:
             # Sizing
             share_type=ShareType(sizing_cfg.get("share_type", "integer")),
             # Commission
-            commission_type=CommissionType(comm_cfg.get("model", "per_share")),
+            commission_type=CommissionType(comm_cfg.get("model", "none")),
             commission_rate=comm_cfg.get("rate", 0.0),
-            commission_per_share=comm_cfg.get("per_share", 0.005),
+            commission_per_share=comm_cfg.get("per_share", 0.0),
             commission_per_trade=comm_cfg.get("per_trade", 0.0),
-            commission_minimum=comm_cfg.get("minimum", 1.0),
+            commission_minimum=comm_cfg.get("minimum", 0.0),
             # Slippage
             slippage_type=SlippageType(slip_cfg.get("model", "none")),
             slippage_rate=slip_cfg.get("rate", 0.0),

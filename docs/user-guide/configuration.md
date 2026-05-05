@@ -93,11 +93,11 @@ mark source.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `commission_type` | CommissionType | PER_SHARE | Model: NONE, PERCENTAGE, PER_SHARE, PER_TRADE, TIERED |
+| `commission_type` | CommissionType | NONE | Model: NONE, PERCENTAGE, PER_SHARE, PER_TRADE, TIERED |
 | `commission_rate` | float | 0.0 | Rate for percentage model |
-| `commission_per_share` | float | 0.005 | Dollar amount per share |
+| `commission_per_share` | float | 0.0 | Dollar amount per share |
 | `commission_per_trade` | float | 0.0 | Dollar amount per trade |
-| `commission_minimum` | float | 1.0 | Minimum commission per trade |
+| `commission_minimum` | float | 0.0 | Minimum commission per trade |
 
 ### Slippage
 
@@ -111,13 +111,12 @@ mark source.
 | `slippage_spread_convention` | SpreadConvention | FULL_SPREAD | Interpret spread input as full spread or per-side cost |
 | `stop_slippage_rate` | float | 0.0 | Additional slippage for stop exits |
 
-The plain `BacktestConfig()` defaults are intentionally conservative about hidden
+The plain `BacktestConfig()` defaults are intentionally neutral about hidden
 friction:
 
-- commission defaults to the current IBKR-style fixed-share anchor
-  (`$0.005/share`, `$1.00` minimum)
+- commission defaults to `NONE`
 - slippage defaults to `NONE`
-- if you want percentage, spread, fixed, or volume-based execution costs, opt in explicitly
+- if you want broker-specific fees or synthetic execution costs, opt in explicitly
 
 ### Position Sizing
 
