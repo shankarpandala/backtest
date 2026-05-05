@@ -718,6 +718,10 @@ class TestPresetRoundTrip:
         assert config.share_type == ShareType.INTEGER
         assert config.fill_ordering == FillOrdering.EXIT_FIRST
         assert config.reject_on_insufficient_cash is True
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+        assert config.slippage_type == SlippageType.NONE
 
     def test_fast_preset_values(self):
         config = BacktestConfig.from_preset("fast")
@@ -971,7 +975,13 @@ class TestFromDictDefaultParity:
         assert from_empty.settlement_delay == default.settlement_delay
 
     def test_constructor_defaults_to_integer_shares(self):
-        assert BacktestConfig().share_type == ShareType.INTEGER
+        config = BacktestConfig()
+        assert config.share_type == ShareType.INTEGER
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+        assert config.slippage_type == SlippageType.NONE
+        assert config.slippage_rate == 0.0
 
 
 class TestFeedSpecConfigResolution:

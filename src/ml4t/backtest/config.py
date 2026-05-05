@@ -525,15 +525,15 @@ class BacktestConfig:
     share_type: ShareType = ShareType.INTEGER
 
     # === Commission ===
-    commission_type: CommissionType = CommissionType.PERCENTAGE
-    commission_rate: float = 0.001  # 0.1% per trade
-    commission_per_share: float = 0.0  # $ per share (if per_share model)
+    commission_type: CommissionType = CommissionType.PER_SHARE
+    commission_rate: float = 0.0  # % of trade value (if percentage model)
+    commission_per_share: float = 0.005  # $ per share (if per_share model)
     commission_per_trade: float = 0.0  # $ per trade (if per_trade model)
-    commission_minimum: float = 0.0  # Minimum commission per trade
+    commission_minimum: float = 1.0  # Minimum commission per trade
 
     # === Slippage ===
-    slippage_type: SlippageType = SlippageType.PERCENTAGE
-    slippage_rate: float = 0.001  # 0.1%
+    slippage_type: SlippageType = SlippageType.NONE
+    slippage_rate: float = 0.0  # % of price (if percentage model)
     slippage_fixed: float = 0.0  # $ per share (if fixed model)
     slippage_spread: float = 0.0  # Quoted spread in currency units (if spread model)
     slippage_spread_by_asset: dict[str, float] = field(default_factory=dict)
@@ -929,14 +929,14 @@ class BacktestConfig:
             # Sizing
             share_type=ShareType(sizing_cfg.get("share_type", "integer")),
             # Commission
-            commission_type=CommissionType(comm_cfg.get("model", "percentage")),
-            commission_rate=comm_cfg.get("rate", 0.001),
-            commission_per_share=comm_cfg.get("per_share", 0.0),
+            commission_type=CommissionType(comm_cfg.get("model", "per_share")),
+            commission_rate=comm_cfg.get("rate", 0.0),
+            commission_per_share=comm_cfg.get("per_share", 0.005),
             commission_per_trade=comm_cfg.get("per_trade", 0.0),
-            commission_minimum=comm_cfg.get("minimum", 0.0),
+            commission_minimum=comm_cfg.get("minimum", 1.0),
             # Slippage
-            slippage_type=SlippageType(slip_cfg.get("model", "percentage")),
-            slippage_rate=slip_cfg.get("rate", 0.001),
+            slippage_type=SlippageType(slip_cfg.get("model", "none")),
+            slippage_rate=slip_cfg.get("rate", 0.0),
             slippage_fixed=slip_cfg.get("fixed", 0.0),
             slippage_spread=slip_cfg.get("spread", 0.0),
             slippage_spread_by_asset={

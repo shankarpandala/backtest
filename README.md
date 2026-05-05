@@ -228,8 +228,8 @@ from ml4t.backtest import Strategy, TargetWeightExecutor, RebalanceConfig
 class WeightStrategy(Strategy):
     def __init__(self):
         self.executor = TargetWeightExecutor(RebalanceConfig(
-            min_trade_value=100,
-            min_weight_change=0.01,
+            min_trade_value=100,    # Optional: skip tiny dollar trades
+            min_weight_change=0.01, # Optional: skip tiny weight changes
         ))
         self.bar_count = 0
 
@@ -249,6 +249,13 @@ class WeightStrategy(Strategy):
             weights = {a: w / total for a, w in weights.items()}
             self.executor.execute(weights, data, broker)
 ```
+
+`RebalanceConfig` defaults both `min_trade_value` and `min_weight_change` to
+`0.0`, so these filters are opt-in.
+
+`BacktestConfig()` defaults to an IBKR-style fixed-share commission anchor
+(`$0.005/share`, `$1.00` minimum) and `slippage_type=NONE`. Synthetic slippage
+and other cost models are opt-in.
 
 ## Cross-Framework Validation
 

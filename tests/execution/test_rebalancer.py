@@ -21,8 +21,8 @@ class TestRebalanceConfig:
     def test_default_values(self):
         """Test default configuration values."""
         config = RebalanceConfig()
-        assert config.min_trade_value == 100.0
-        assert config.min_weight_change == 0.01
+        assert config.min_trade_value == 0.0
+        assert config.min_weight_change == 0.0
         assert config.allow_fractional is None
         assert config.round_lots is False
         assert config.lot_size == 100

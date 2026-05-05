@@ -93,23 +93,31 @@ mark source.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `commission_type` | CommissionType | PERCENTAGE | Model: NONE, PERCENTAGE, PER_SHARE, PER_TRADE, TIERED |
-| `commission_rate` | float | 0.001 | Rate for percentage model (0.1%) |
-| `commission_per_share` | float | 0.0 | Dollar amount per share |
+| `commission_type` | CommissionType | PER_SHARE | Model: NONE, PERCENTAGE, PER_SHARE, PER_TRADE, TIERED |
+| `commission_rate` | float | 0.0 | Rate for percentage model |
+| `commission_per_share` | float | 0.005 | Dollar amount per share |
 | `commission_per_trade` | float | 0.0 | Dollar amount per trade |
-| `commission_minimum` | float | 0.0 | Minimum commission per trade |
+| `commission_minimum` | float | 1.0 | Minimum commission per trade |
 
 ### Slippage
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `slippage_type` | SlippageType | PERCENTAGE | Model: NONE, PERCENTAGE, FIXED, SPREAD, VOLUME_BASED |
-| `slippage_rate` | float | 0.001 | Rate for percentage model (0.1%) |
+| `slippage_type` | SlippageType | NONE | Model: NONE, PERCENTAGE, FIXED, SPREAD, VOLUME_BASED |
+| `slippage_rate` | float | 0.0 | Rate for percentage model |
 | `slippage_fixed` | float | 0.0 | Fixed dollar amount per share |
 | `slippage_spread` | float | 0.0 | Spread in currency units for bar-only spread approximation |
 | `slippage_spread_by_asset` | dict[str, float] | `{}` | Optional per-asset spread overrides |
 | `slippage_spread_convention` | SpreadConvention | FULL_SPREAD | Interpret spread input as full spread or per-side cost |
 | `stop_slippage_rate` | float | 0.0 | Additional slippage for stop exits |
+
+The plain `BacktestConfig()` defaults are intentionally conservative about hidden
+friction:
+
+- commission defaults to the current IBKR-style fixed-share anchor
+  (`$0.005/share`, `$1.00` minimum)
+- slippage defaults to `NONE`
+- if you want percentage, spread, fixed, or volume-based execution costs, opt in explicitly
 
 ### Position Sizing
 

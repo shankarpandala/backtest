@@ -75,8 +75,8 @@ For more control, use the `TargetWeightExecutor` with a `RebalanceConfig`:
 from ml4t.backtest.execution.rebalancer import TargetWeightExecutor, RebalanceConfig
 
 rebalance_config = RebalanceConfig(
-    min_trade_value=100,        # Skip trades smaller than $100
-    min_weight_change=0.01,     # Skip changes smaller than 1%
+    min_trade_value=100,        # Optional: skip trades smaller than $100
+    min_weight_change=0.01,     # Optional: skip changes smaller than 1%
     allow_fractional=False,     # Round to whole shares
     max_single_weight=0.25,     # Cap any single position at 25%
     cancel_before_rebalance=True,
@@ -93,6 +93,10 @@ class MyOptimizer:
         # Your optimization logic here
         return {"AAPL": 0.3, "MSFT": 0.3, "GOOG": 0.4}
 ```
+
+By default, `RebalanceConfig` uses `min_trade_value=0.0` and
+`min_weight_change=0.0`, so no trade-size or weight-delta filter is applied
+unless you opt into one explicitly.
 
 ## See It in Action
 

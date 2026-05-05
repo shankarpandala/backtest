@@ -24,12 +24,14 @@ DEFAULT_PROFILE = {
         "share_type": "integer",
     },
     "commission": {
-        "model": "percentage",
-        "rate": 0.001,
+        "model": "per_share",
+        "rate": 0.0,
+        "per_share": 0.005,
+        "minimum": 1.0,
     },
     "slippage": {
-        "model": "percentage",
-        "rate": 0.001,
+        "model": "none",
+        "rate": 0.0,
     },
     "cash": {
         "initial": 100000.0,

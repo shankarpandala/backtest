@@ -51,7 +51,9 @@ class RebalanceConfig:
 
     Attributes:
         min_trade_value: Skip trades with absolute value smaller than this ($).
+            Default 0.0 disables this filter.
         min_weight_change: Skip if weight change is smaller than this (decimal).
+            Default 0.0 disables this filter.
         allow_fractional: Allow fractional shares (default: False, whole shares only).
         round_lots: Round to lot_size increments (e.g., 100-share lots).
         lot_size: Lot size for rounding (only used if round_lots=True).
@@ -70,8 +72,8 @@ class RebalanceConfig:
     """
 
     # Trade thresholds
-    min_trade_value: float = 100.0
-    min_weight_change: float = 0.01
+    min_trade_value: float = 0.0
+    min_weight_change: float = 0.0
 
     # Share handling
     allow_fractional: bool | None = None  # None = defer to broker.share_type

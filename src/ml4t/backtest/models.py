@@ -34,7 +34,7 @@ class NoCommission:
 class PercentageCommission:
     """Commission as percentage of trade value."""
 
-    def __init__(self, rate: float = 0.001):
+    def __init__(self, rate: float = 0.0):
         self.rate = rate
 
     def calculate(self, asset: str, quantity: float, price: float) -> float:
@@ -165,7 +165,7 @@ class FixedSlippage:
     - Sell at $100.00 fills at $99.99
     """
 
-    def __init__(self, amount: float = 0.01):
+    def __init__(self, amount: float = 0.0):
         self.amount = amount
 
     def calculate(self, asset: str, quantity: float, price: float, volume: float | None) -> float:
@@ -184,7 +184,7 @@ class SpreadSlippage:
 
     def __init__(
         self,
-        spread: float = 0.01,
+        spread: float = 0.0,
         asset_spreads: dict[str, float] | None = None,
         convention: str = "full_spread",
     ):
@@ -202,7 +202,7 @@ class SpreadSlippage:
 class PercentageSlippage:
     """Slippage as percentage of price (per-unit price adjustment)."""
 
-    def __init__(self, rate: float = 0.001):
+    def __init__(self, rate: float = 0.0):
         self.rate = rate
 
     def calculate(self, asset: str, quantity: float, price: float, volume: float | None) -> float:
@@ -214,7 +214,7 @@ class PercentageSlippage:
 class VolumeShareSlippage:
     """Slippage based on order size vs volume (market impact)."""
 
-    def __init__(self, impact_factor: float = 0.1):
+    def __init__(self, impact_factor: float = 0.0):
         self.impact_factor = impact_factor
 
     def calculate(self, asset: str, quantity: float, price: float, volume: float | None) -> float:
