@@ -16,6 +16,18 @@ Profiles are pre-configured `BacktestConfig` settings that replicate the exact b
 | `lean` | Match QuantConnect LEAN's default behavior |
 | `realistic` | Conservative settings for production |
 
+### Broker Presets
+
+| Profile | Description |
+|---------|-------------|
+| `ibkr_us_stocks_fixed` | Interactive Brokers US stocks fixed commission schedule |
+
+The broker preset also supports a modular alias:
+
+| Alias | Resolves To |
+|-------|-------------|
+| `ibkr:us:stocks:fixed` | `ibkr_us_stocks_fixed` |
+
 ### Strict Profiles
 
 Strict variants tune additional knobs (cash validation, settlement, short policies) for maximum parity on large-scale comparisons:
@@ -33,6 +45,7 @@ Strict variants tune additional knobs (cash validation, settlement, short polici
 | `vectorbt_pro` | vectorbt |
 | `vectorbt_oss` | vectorbt |
 | `quantconnect` | lean |
+| `ibkr:us:stocks:fixed` | ibkr_us_stocks_fixed |
 
 ## Usage
 

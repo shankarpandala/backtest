@@ -234,6 +234,52 @@ REALISTIC_PROFILE = {
     },
 }
 
+IBKR_US_STOCKS_FIXED_PROFILE = {
+    "account": {
+        "allow_short_selling": False,
+        "allow_leverage": False,
+        "short_cash_policy": "credit",
+    },
+    "execution": {
+        "execution_price": "open",
+        "execution_mode": "next_bar",
+    },
+    "stops": {
+        "stop_fill_mode": "stop_price",
+        "stop_level_basis": "fill_price",
+        "trail_hwm_source": "close",
+        "trail_stop_timing": "lagged",
+    },
+    "position_sizing": {
+        "share_type": "integer",
+    },
+    "commission": {
+        "model": "per_share",
+        "rate": 0.0,
+        "per_share": 0.005,
+        "minimum": 1.0,
+    },
+    "slippage": {
+        "model": "none",
+        "rate": 0.0,
+    },
+    "cash": {
+        "initial": 100000.0,
+        "buffer_pct": 0.0,
+    },
+    "orders": {
+        "reject_on_insufficient_cash": True,
+        "partial_fills_allowed": False,
+        "fill_ordering": "exit_first",
+        "entry_order_priority": "submission",
+        "rebalance_mode": "incremental",
+        "rebalance_headroom_pct": 1.0,
+        "missing_price_policy": "skip",
+        "late_asset_policy": "allow",
+        "late_asset_min_bars": 1,
+    },
+}
+
 VECTORBT_STRICT_PROFILE = deepcopy(VECTORBT_PROFILE)
 VECTORBT_STRICT_PROFILE["account"]["short_cash_policy"] = "lock_notional"
 VECTORBT_STRICT_PROFILE["orders"]["reject_on_insufficient_cash"] = True
@@ -354,6 +400,7 @@ _PROFILES = {
     "zipline": ZIPLINE_PROFILE,
     "lean": LEAN_PROFILE,
     "realistic": REALISTIC_PROFILE,
+    "ibkr_us_stocks_fixed": IBKR_US_STOCKS_FIXED_PROFILE,
     "vectorbt_strict": VECTORBT_STRICT_PROFILE,
     "backtrader_strict": BACKTRADER_STRICT_PROFILE,
     "zipline_strict": ZIPLINE_STRICT_PROFILE,
@@ -363,6 +410,7 @@ _ALIASES = {
     "vectorbt_pro": "vectorbt",
     "vectorbt_oss": "vectorbt",
     "quantconnect": "lean",
+    "ibkr:us:stocks:fixed": "ibkr_us_stocks_fixed",
     "vectorbt_compare": "vectorbt_strict",
     "backtrader_compare": "backtrader_strict",
     "zipline_compare": "zipline_strict",

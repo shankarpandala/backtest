@@ -705,7 +705,8 @@ class TestPresetRoundTrip:
     """Presets should produce correct field values."""
 
     @pytest.mark.parametrize(
-        "preset_name", ["default", "fast", "backtrader", "vectorbt", "zipline", "realistic"]
+        "preset_name",
+        ["default", "fast", "backtrader", "vectorbt", "zipline", "realistic", "ibkr_us_stocks_fixed"],
     )
     def test_preset_creates_valid_config(self, preset_name):
         config = BacktestConfig.from_preset(preset_name)
@@ -752,6 +753,16 @@ class TestPresetRoundTrip:
         assert config.share_type == ShareType.INTEGER
         assert config.fill_ordering == FillOrdering.EXIT_FIRST
         assert config.next_bar_queue_shadow_validation is True
+
+    def test_ibkr_us_stocks_fixed_preset_values(self):
+        config = BacktestConfig.from_preset("ibkr_us_stocks_fixed")
+        assert config.share_type == ShareType.INTEGER
+        assert config.execution_mode == ExecutionMode.NEXT_BAR
+        assert config.execution_price == ExecutionPrice.OPEN
+        assert config.commission_type == CommissionType.PER_SHARE
+        assert config.commission_per_share == 0.005
+        assert config.commission_minimum == 1.0
+        assert config.slippage_type == SlippageType.NONE
 
     def test_to_dict_from_dict_roundtrip(self):
         config = BacktestConfig.from_preset("backtrader")

@@ -118,3 +118,13 @@ def test_quantconnect_alias_resolves_to_lean() -> None:
     lean = BacktestConfig.from_preset("lean")
     assert cfg.fill_ordering == lean.fill_ordering
     assert cfg.allow_leverage == lean.allow_leverage
+
+
+def test_ibkr_us_stocks_fixed_alias_resolves() -> None:
+    cfg = BacktestConfig.from_preset("ibkr:us:stocks:fixed")
+    canonical = BacktestConfig.from_preset("ibkr_us_stocks_fixed")
+    assert cfg.preset_name == "ibkr:us:stocks:fixed"
+    assert cfg.commission_type == canonical.commission_type
+    assert cfg.commission_per_share == canonical.commission_per_share
+    assert cfg.commission_minimum == canonical.commission_minimum
+    assert cfg.slippage_type == canonical.slippage_type
