@@ -19,6 +19,7 @@ Example:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -336,16 +337,7 @@ class TargetWeightExecutor:
         multiplier = broker.get_multiplier(asset)
         shares = delta_value / (price * multiplier)
 
-        # Apply share rounding
-        # Resolve fractional setting: explicit config > broker.share_type > default
-        use_fractional = self.config.allow_fractional
-        if use_fractional is None:
-            use_fractional = getattr(broker, "share_type", ShareType.INTEGER) == ShareType.FRACTIONAL
-
-        if self.config.round_lots:
-            shares = round(shares / self.config.lot_size) * self.config.lot_size
-        elif not use_fractional:
-            shares = int(shares)
+        shares = self._quantize_shares(shares, broker)
 
         if shares == 0:
             return None
@@ -359,6 +351,24 @@ class TargetWeightExecutor:
         """Return the current bar close used for new rebalance trades."""
         asset_data = data.get(asset) or {}
         return asset_data.get("close")
+
+    def _quantize_shares(self, shares: float, broker: Broker) -> float:
+        """Quantize rebalance share deltas to the broker's share granularity.
+
+        For target-weight rebalancing under integer-share mode, round to the
+        nearest whole share instead of truncating toward zero. Truncation
+        systematically under-trades one-sided targets and can create extra
+        correction rebalances over time.
+        """
+        use_fractional = self.config.allow_fractional
+        if use_fractional is None:
+            use_fractional = getattr(broker, "share_type", ShareType.INTEGER) == ShareType.FRACTIONAL
+
+        if self.config.round_lots:
+            return round(shares / self.config.lot_size) * self.config.lot_size
+        if use_fractional:
+            return shares
+        return float(math.copysign(math.floor(abs(shares) + 0.5), shares))
 
     def _get_position_price(
         self,
@@ -482,13 +492,15 @@ class TargetWeightExecutor:
                 delta_value = equity * weight_delta
                 shares = delta_value / (price * multiplier)
 
+                quantized_shares = self._quantize_shares(shares, broker)
+
                 # Determine if would be skipped
                 skip_reason = None
                 if abs(weight_delta) < self.config.min_weight_change:
                     skip_reason = "weight_change_too_small"
                 elif abs(delta_value) < self.config.min_trade_value:
                     skip_reason = "trade_value_too_small"
-                elif self.config.allow_fractional is False and abs(int(shares)) == 0:
+                elif quantized_shares == 0:
                     skip_reason = "rounds_to_zero_shares"
 
                 previews.append(
@@ -498,6 +510,7 @@ class TargetWeightExecutor:
                         "target_weight": target_wt,
                         "weight_delta": weight_delta,
                         "shares": shares,
+                        "quantized_shares": quantized_shares,
                         "value": delta_value,
                         "skip_reason": skip_reason,
                     }

@@ -253,7 +253,7 @@ class TestTargetWeightExecutorShareHandling:
         orders = executor.execute(target_weights, sample_data, broker)
 
         assert len(orders) == 1
-        assert orders[0].quantity == 66  # int(66.67) = 66
+        assert orders[0].quantity == 67  # nearest whole share
 
     def test_fractional_shares(self, broker, sample_data):
         """Test fractional shares when allowed."""
@@ -284,11 +284,44 @@ class TestTargetWeightExecutorShareHandling:
         )
 
         # Very small target that rounds to 0 shares
-        # 0.1% of $100k = $100 / $150 = 0.67 shares -> int(0.67) = 0
-        target_weights = {"AAPL": 0.001}
+        # 0.01% of $100k = $10 / $150 = 0.067 shares -> rounds to 0
+        target_weights = {"AAPL": 0.0001}
         orders = executor.execute(target_weights, sample_data, broker)
 
         assert len(orders) == 0
+
+    def test_integer_rounding_avoids_follow_on_correction_rebalance(self, broker):
+        """Nearest-share quantization should reduce threshold-crossing drift."""
+        executor = TargetWeightExecutor(
+            config=RebalanceConfig(
+                allow_fractional=False,
+                min_weight_change=0.005,
+                min_trade_value=0.0,
+            )
+        )
+        data = {"AAPL": {"close": 100.0}}
+
+        broker._update_time(
+            datetime(2024, 1, 1, 9, 30),
+            {"AAPL": 100.0},
+            {"AAPL": 100.0},
+            {"AAPL": 100.0},
+            {"AAPL": 100.0},
+            {"AAPL": 1_000_000},
+            {},
+        )
+
+        target_weights = {"AAPL": 0.0056}  # 5.6 shares on $100k equity
+        orders = executor.execute(target_weights, data, broker)
+        assert len(orders) == 1
+        assert orders[0].quantity == 6
+
+        broker._process_orders()
+
+        # With nearest-share quantization, the remaining drift is below the
+        # configured threshold and should not trigger a correction trade.
+        follow_on = executor.execute(target_weights, data, broker)
+        assert follow_on == []
 
 
 class TestTargetWeightExecutorPendingOrders:
@@ -597,7 +630,7 @@ class TestTargetWeightExecutorPreview:
         )
 
         # Very small target weight that would round to 0 shares
-        target_weights = {"AAPL": 0.001}  # 0.1% of 100k = $100 = 0.67 shares
+        target_weights = {"AAPL": 0.0001}  # 0.01% of 100k = $10 = 0.067 shares
         previews = executor.preview(target_weights, data, broker)
 
         assert len(previews) == 1
