@@ -365,10 +365,14 @@ class TargetWeightExecutor:
             use_fractional = getattr(broker, "share_type", ShareType.INTEGER) == ShareType.FRACTIONAL
 
         if self.config.round_lots:
-            return round(shares / self.config.lot_size) * self.config.lot_size
+            rounded_lots = round(shares / self.config.lot_size) * self.config.lot_size
+            if use_fractional:
+                return rounded_lots
+            return int(rounded_lots)
         if use_fractional:
             return shares
-        return float(math.copysign(math.floor(abs(shares) + 0.5), shares))
+        rounded = math.copysign(math.floor(abs(shares) + 0.5), shares)
+        return int(rounded)
 
     def _get_position_price(
         self,

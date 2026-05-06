@@ -34,6 +34,8 @@ from ml4t.backtest.models import (
     CombinedCommission,
     NoCommission,
     NoSlippage,
+    PercentageCommission,
+    PercentageSlippage,
     PerShareCommission,
     SpreadSlippage,
     TieredCommission,
@@ -1266,6 +1268,18 @@ class TestConfigModelWiring:
         )
         assert isinstance(broker.commission_model, PerShareCommission)
         assert broker.commission_model.per_share == 0.01
+
+    def test_legacy_direct_cost_fields_still_activate_models(self):
+        broker = Broker.from_config(
+            BacktestConfig(
+                commission_rate=0.001,
+                slippage_rate=0.002,
+            )
+        )
+        assert isinstance(broker.commission_model, PercentageCommission)
+        assert broker.commission_model.rate == 0.001
+        assert isinstance(broker.slippage_model, PercentageSlippage)
+        assert broker.slippage_model.rate == 0.002
 
     def test_spread_slippage_roundtrip_preserves_asset_map(self):
         config = BacktestConfig(

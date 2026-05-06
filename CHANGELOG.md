@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.0b16 - 2026-05-05
+
+### Added
+
+- `SlippageType.SPREAD` with `SpreadSlippage` for bar-based spread-cost modeling.
+- Asset-aware spread configuration via `slippage_spread`, `slippage_spread_by_asset`, and
+  `slippage_spread_convention`.
+- Explicit broker assumption helpers via `BacktestConfig.from_assumptions(...)` and
+  `BacktestConfig.from_user_config(...)`.
+- The `ibkr_us_stocks_fixed` preset for explicit Interactive Brokers US equities fixed
+  commission assumptions.
+
+### Changed
+
+- Generic engine defaults are now neutral again: no default commission, no default slippage,
+  `min_trade_value=0.0`, and `min_weight_change=0.0`.
+- Integer shares are now the default share mode for the generic and fast profiles, while
+  `vectorbt` remains fractional.
+- Integer rebalancing now rounds target-share deltas to the nearest whole share instead of
+  truncating toward zero, reducing correction churn and fill amplification.
+- User guides now document neutral defaults, broker assumptions, spread slippage, and the
+  updated rebalance behavior.
+
+### Validation
+
+- `uv run pytest tests/ -q`
+- `uv run ruff check src/ml4t/backtest tests`
+- `uv run ty check`
+- `uv run python -m mkdocs build --strict`
+
 ## 0.1.0b15 - 2026-04-27
 
 ### Added

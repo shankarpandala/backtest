@@ -288,39 +288,57 @@ class Broker:
             VolumeShareSlippage,
         )
 
+        effective_commission_type = config.commission_type
+        if effective_commission_type == CommissionType.NONE:
+            if config.commission_per_share > 0:
+                effective_commission_type = CommissionType.PER_SHARE
+            elif config.commission_per_trade > 0:
+                effective_commission_type = CommissionType.PER_TRADE
+            elif config.commission_rate > 0:
+                effective_commission_type = CommissionType.PERCENTAGE
+
+        effective_slippage_type = config.slippage_type
+        if effective_slippage_type == SlippageType.NONE:
+            if config.slippage_spread > 0 or config.slippage_spread_by_asset:
+                effective_slippage_type = SlippageType.SPREAD
+            elif config.slippage_fixed > 0:
+                effective_slippage_type = SlippageType.FIXED
+            elif config.slippage_rate > 0:
+                effective_slippage_type = SlippageType.PERCENTAGE
+
         # Build commission model from config
         commission_model = None
-        if config.commission_type == CommissionType.PERCENTAGE:
+        if effective_commission_type == CommissionType.PERCENTAGE:
             commission_model = PercentageCommission(rate=config.commission_rate)
-        elif config.commission_type == CommissionType.PER_SHARE:
+        elif effective_commission_type == CommissionType.PER_SHARE:
             commission_model = PerShareCommission(
                 per_share=config.commission_per_share,
                 minimum=config.commission_minimum,
             )
-        elif config.commission_type == CommissionType.PER_TRADE:
+        elif effective_commission_type == CommissionType.PER_TRADE:
             commission_model = CombinedCommission(fixed=config.commission_per_trade)
-        elif config.commission_type == CommissionType.TIERED:
+        elif effective_commission_type == CommissionType.TIERED:
             commission_model = TieredCommission(
                 tiers=[(float("inf"), config.commission_rate)],
             )
-        elif config.commission_type == CommissionType.NONE:
+        elif effective_commission_type == CommissionType.NONE:
             commission_model = NoCommission()
 
         # Build slippage model from config
         slippage_model = None
-        if config.slippage_type == SlippageType.PERCENTAGE:
+        if effective_slippage_type == SlippageType.PERCENTAGE:
             slippage_model = PercentageSlippage(rate=config.slippage_rate)
-        elif config.slippage_type == SlippageType.FIXED:
+        elif effective_slippage_type == SlippageType.FIXED:
             slippage_model = FixedSlippage(amount=config.slippage_fixed)
-        elif config.slippage_type == SlippageType.SPREAD:
+        elif effective_slippage_type == SlippageType.SPREAD:
             slippage_model = SpreadSlippage(
                 spread=config.slippage_spread,
                 asset_spreads=config.slippage_spread_by_asset,
                 convention=config.slippage_spread_convention.value,
             )
-        elif config.slippage_type == SlippageType.VOLUME_BASED:
+        elif effective_slippage_type == SlippageType.VOLUME_BASED:
             slippage_model = VolumeShareSlippage(impact_factor=config.slippage_rate)
-        elif config.slippage_type == SlippageType.NONE:
+        elif effective_slippage_type == SlippageType.NONE:
             slippage_model = NoSlippage()
 
         return cls(
