@@ -1,7 +1,8 @@
 """Memory efficiency tests for DataFeed.
 
-These tests verify that the DataFeed implementation is memory-efficient
-by storing DataFrames instead of pre-converted dicts.
+These tests verify that DataFeed keeps one source DataFrame plus compact
+timestamp slice indexes, instead of materializing Python dicts or one child
+DataFrame per timestamp up front.
 """
 
 from datetime import datetime, timedelta
@@ -39,20 +40,18 @@ class TestDataFeedMemoryEfficiency:
 
         return pl.DataFrame(rows)
 
-    def test_datafeed_stores_dataframes_not_dicts(self):
-        """Verify DataFeed stores DataFrames internally (not dicts)."""
+    def test_datafeed_stores_slice_indexes_not_row_dicts(self):
+        """Verify DataFeed stores compact timestamp slice indexes internally."""
         prices = self._create_large_dataset(10, 5)
         feed = DataFeed(prices_df=prices)
 
-        # Check internal storage type
-        first_ts = list(feed._prices_by_ts.keys())[0]
-        stored_value = feed._prices_by_ts[first_ts]
+        first_ts = list(feed._price_ranges_by_ts.keys())[0]
+        offset, length = feed._price_ranges_by_ts[first_ts]
+        stored_slice = feed.prices.slice(offset, length)
 
-        # Should be a DataFrame, not a list of dicts
-        assert isinstance(stored_value, pl.DataFrame), (
-            f"Expected pl.DataFrame, got {type(stored_value)}. "
-            "DataFeed should store DataFrames for memory efficiency."
-        )
+        assert isinstance(stored_slice, pl.DataFrame)
+        assert length == 5
+        assert stored_slice.height == 5
 
     def test_datafeed_iteration_produces_correct_format(self):
         """Verify iteration produces the expected dict format."""
@@ -77,22 +76,22 @@ class TestDataFeedMemoryEfficiency:
     def test_datafeed_memory_scales_with_unique_timestamps(self):
         """Verify memory usage scales with timestamps, not total rows.
 
-        The key insight is that storing DataFrames per timestamp uses
-        much less memory than storing dicts per row.
+        The key insight is that storing timestamp slice metadata uses much
+        less memory than materializing Python dicts or child DataFrames
+        per timestamp.
         """
         # Create dataset: 100 bars × 10 assets = 1000 rows
         prices = self._create_large_dataset(100, 10)
         feed = DataFeed(prices_df=prices)
 
-        # Memory should be dominated by DataFrames, not dicts
-        # We verify this by checking the storage structure
-        assert len(feed._prices_by_ts) == 100  # One entry per timestamp
+        # Memory should be dominated by the source DataFrame, not per-row dicts.
+        assert len(feed._price_ranges_by_ts) == 100  # One compact entry per timestamp
         assert feed.n_bars == 100
 
-        # Each stored value is a DataFrame (compact) not list[dict] (bloated)
-        for ts_df in feed._prices_by_ts.values():
-            assert isinstance(ts_df, pl.DataFrame)
-            assert len(ts_df) == 10  # 10 assets per timestamp
+        for offset, length in feed._price_ranges_by_ts.values():
+            assert isinstance(offset, int)
+            assert isinstance(length, int)
+            assert length == 10  # 10 assets per timestamp
 
     def test_datafeed_with_signals(self):
         """Verify DataFeed correctly handles signals with lazy conversion."""
@@ -138,8 +137,8 @@ class TestDataFeedMemoryEfficiency:
     def test_datafeed_memory_benchmark(self):
         """Benchmark memory usage for medium-scale dataset.
 
-        This test verifies the memory fix is working by checking
-        that the internal storage uses DataFrames.
+        This test verifies the memory fix is working by checking that the
+        internal storage uses compact slice indexes over the original frame.
 
         For a proper memory measurement, run:
             python -c "
@@ -176,7 +175,11 @@ class TestDataFeedMemoryEfficiency:
 
         # Verify structure is correct
         assert feed.n_bars == 100
-        assert all(isinstance(df, pl.DataFrame) for df in feed._prices_by_ts.values())
+        assert len(feed._price_ranges_by_ts) == 100
+        assert all(
+            isinstance(offset, int) and isinstance(length, int)
+            for offset, length in feed._price_ranges_by_ts.values()
+        )
 
         # Iterate through all bars to verify lazy conversion works
         count = 0

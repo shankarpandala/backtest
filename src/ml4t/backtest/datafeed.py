@@ -1,7 +1,8 @@
 """Polars-based multi-asset data feed with O(1) timestamp lookups.
 
-Memory-efficient implementation that stores partitioned DataFrames
-and converts to dicts lazily at iteration time.
+Memory-efficient implementation that stores the original DataFrames plus
+timestamp-to-slice indexes, then converts only the current bar to dicts at
+iteration time.
 """
 
 from datetime import datetime
@@ -48,10 +49,10 @@ class _AssetsData(dict[str, dict[str, Any]]):
 class DataFeed:
     """Polars-based multi-asset data feed with signals and context.
 
-    Pre-partitions data by timestamp at initialization for O(1) lookups
-    during iteration. DataFrames are stored in their native format and
-    converted to dicts only at iteration time, reducing memory usage ~10x
-    for large datasets.
+    Pre-indexes data by timestamp at initialization for O(1) lookups during
+    iteration. DataFrames are kept in their native format and converted to
+    dicts only for the active bar, avoiding the large memory overhead of
+    materializing one child DataFrame per timestamp.
 
     Memory Efficiency:
         - 1M bars: ~100 MB (was ~1 GB with pre-converted dicts)
@@ -145,15 +146,15 @@ class DataFeed:
         self._bid_size_col = self.feed_spec.bid_size_col
         self._ask_size_col = self.feed_spec.ask_size_col
 
-        # Pre-partition data by timestamp for O(1) lookups
-        # Store DataFrames (memory efficient) instead of dicts (memory explosion)
-        self._prices_by_ts = self._partition_by_timestamp(self.prices)
-        self._signals_by_ts = (
-            self._partition_by_timestamp(self.signals) if self.signals is not None else {}
-        )
-        self._context_by_ts = (
-            self._partition_by_timestamp(self.context) if self.context is not None else {}
-        )
+        self.prices, self._price_ranges_by_ts = self._index_by_timestamp(self.prices)
+        if self.signals is not None:
+            self.signals, self._signal_ranges_by_ts = self._index_by_timestamp(self.signals)
+        else:
+            self._signal_ranges_by_ts = {}
+        if self.context is not None:
+            self.context, self._context_ranges_by_ts = self._index_by_timestamp(self.context)
+        else:
+            self._context_ranges_by_ts = {}
 
         self._timestamps = self._get_timestamps()
         self._idx = 0
@@ -239,27 +240,49 @@ class DataFeed:
             f"{cls.ENTITY_COL_CANDIDATES}, got columns {columns}"
         )
 
-    def _partition_by_timestamp(self, df: pl.DataFrame) -> dict[datetime, pl.DataFrame]:
-        """Partition DataFrame into dict keyed by timestamp for O(1) access.
-
-        Uses Polars partition_by which is highly optimized and maintains
-        data in columnar format (minimal memory overhead).
-        """
-        result: dict[datetime, pl.DataFrame] = {}
+    def _index_by_timestamp(
+        self, df: pl.DataFrame
+    ) -> tuple[pl.DataFrame, dict[datetime, tuple[int, int]]]:
+        """Return a timestamp -> (offset, length) index over a sorted DataFrame."""
         if self._timestamp_col not in df.columns:
             raise ValueError(
                 f"timestamp_col={self._timestamp_col!r} not found in columns {df.columns}"
             )
-        for ts_df in df.partition_by(self._timestamp_col, maintain_order=True):
-            ts = ts_df[self._timestamp_col][0]
-            result[ts] = ts_df
-        return result
+
+        if not df[self._timestamp_col].is_sorted():
+            df = df.sort(self._timestamp_col)
+
+        counts = df.group_by(self._timestamp_col, maintain_order=True).agg(
+            pl.len().alias("_row_count")
+        )
+        result: dict[datetime, tuple[int, int]] = {}
+        offset = 0
+        for ts, row_count in counts.iter_rows(named=False):
+            count = int(row_count)
+            result[ts] = (offset, count)
+            offset += count
+        return df, result
+
+    @staticmethod
+    def _slice_for_timestamp(
+        df: pl.DataFrame | None,
+        ranges_by_ts: dict[datetime, tuple[int, int]],
+        ts: datetime,
+    ) -> pl.DataFrame | None:
+        """Return the zero-copy timestamp slice for the requested bar."""
+        if df is None:
+            return None
+        bounds = ranges_by_ts.get(ts)
+        if bounds is None:
+            return None
+        offset, length = bounds
+        return df.slice(offset, length)
 
     def _get_timestamps(self) -> list[datetime]:
         """Get sorted list of all timestamps across all data sources."""
-        all_ts = set(self._prices_by_ts.keys())
-        all_ts.update(self._signals_by_ts.keys())
-        all_ts.update(self._context_by_ts.keys())
+        all_ts = set(self._price_ranges_by_ts.keys())
+        all_ts.update(self._signal_ranges_by_ts.keys())
+        all_ts.update(self._context_ranges_by_ts.keys())
         return sorted(all_ts)
 
     def __iter__(self):
@@ -302,7 +325,7 @@ class DataFeed:
         price_ask_size_idx = self._price_ask_size_idx
 
         # Convert price DataFrame slice to dicts (lazy, only current bar)
-        price_df = self._prices_by_ts.get(ts)
+        price_df = self._slice_for_timestamp(self.prices, self._price_ranges_by_ts, ts)
         if price_df is not None:
             for row in price_df.iter_rows(named=False):
                 asset = row[price_asset_idx]
@@ -370,7 +393,7 @@ class DataFeed:
                 assets_data._signals[asset] = assets_data[asset]["signals"]
 
         # Add signals for each asset - lazy conversion
-        signal_df = self._signals_by_ts.get(ts)
+        signal_df = self._slice_for_timestamp(self.signals, self._signal_ranges_by_ts, ts)
         if signal_df is not None:
             signal_asset_idx = self._signal_asset_idx
             signal_col_indices = self._signal_col_indices
@@ -384,7 +407,7 @@ class DataFeed:
 
         # Get context at this timestamp - lazy conversion
         context_data: dict[str, Any] = {}
-        ctx_df = self._context_by_ts.get(ts)
+        ctx_df = self._slice_for_timestamp(self.context, self._context_ranges_by_ts, ts)
         if ctx_df is not None and len(ctx_df) > 0:
             row = ctx_df.row(0)
             for i, col_idx in enumerate(self._context_col_indices):

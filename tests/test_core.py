@@ -279,6 +279,53 @@ class TestDataFeed:
             assert "vix" in context
             assert "spy" in context
 
+    def test_unsorted_inputs_align_prices_signals_and_context(self):
+        ts1 = datetime(2024, 1, 1)
+        ts2 = datetime(2024, 1, 2)
+        prices = pl.DataFrame(
+            {
+                "timestamp": [ts2, ts1, ts2, ts1],
+                "asset": ["AAPL", "AAPL", "MSFT", "MSFT"],
+                "open": [102.0, 100.0, 202.0, 200.0],
+                "high": [103.0, 101.0, 203.0, 201.0],
+                "low": [101.0, 99.0, 201.0, 199.0],
+                "close": [102.5, 100.5, 202.5, 200.5],
+                "volume": [1000.0, 900.0, 1100.0, 950.0],
+            }
+        )
+        signals = pl.DataFrame(
+            {
+                "timestamp": [ts2, ts1, ts2, ts1],
+                "asset": ["AAPL", "AAPL", "MSFT", "MSFT"],
+                "ml_score": [0.7, 0.5, 0.8, 0.4],
+            }
+        )
+        context_df = pl.DataFrame(
+            {
+                "timestamp": [ts2, ts1],
+                "vix": [18.0, 16.0],
+            }
+        )
+
+        feed = DataFeed(prices_df=prices, signals_df=signals, context_df=context_df)
+        rows = list(feed)
+
+        assert [ts for ts, *_ in rows] == [ts1, ts2]
+
+        first_ts, first_data, first_context = rows[0]
+        assert first_ts == ts1
+        assert first_data["AAPL"]["close"] == 100.5
+        assert first_data["MSFT"]["close"] == 200.5
+        assert first_data["AAPL"]["signals"]["ml_score"] == 0.5
+        assert first_data["MSFT"]["signals"]["ml_score"] == 0.4
+        assert first_context["vix"] == 16.0
+
+        second_ts, second_data, second_context = rows[1]
+        assert second_ts == ts2
+        assert second_data["AAPL"]["signals"]["ml_score"] == 0.7
+        assert second_data["MSFT"]["signals"]["ml_score"] == 0.8
+        assert second_context["vix"] == 18.0
+
 
 class TestBroker:
     """Test Broker functionality."""
