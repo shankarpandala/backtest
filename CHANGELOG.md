@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0b17 - 2026-05-10
+
+### Changed
+
+- `DataFeed` now indexes each timestamp as an `(offset, length)` slice over the original
+  prices, signals, and context frames instead of eagerly materializing one child
+  `DataFrame` per timestamp.
+- This substantially reduces timestamp-partition memory overhead on large multi-asset
+  panels while preserving the same lazy per-bar iteration contract.
+- Added regression coverage for unsorted input alignment and updated the dedicated
+  DataFeed memory tests to validate the new slice-index storage model.
+
+### Validation
+
+- `uv run pytest tests/ -q`
+- `uv run ruff check src/ml4t/backtest tests`
+- `uv run ty check`
+- `uv run python -m mkdocs build --strict`
+
 ## 0.1.0b16 - 2026-05-05
 
 ### Added
