@@ -53,6 +53,13 @@ class TestLimitResult:
         assert result.action == "halt"
         assert result.reason == "halt trading"
 
+    def test_liquidate(self):
+        """Test liquidate() factory method."""
+        result = LimitResult.liquidate("flatten portfolio")
+        assert result.breached
+        assert result.action == "liquidate"
+        assert result.reason == "flatten portfolio"
+
 
 class TestPortfolioState:
     """Test PortfolioState dataclass."""
@@ -113,6 +120,24 @@ class TestMaxDrawdownLimit:
         assert result.breached
         assert result.action == "halt"
         assert "15.0%" in result.reason
+
+    def test_breach_uses_liquidate_by_default(self):
+        """Test default drawdown action uses liquidation semantics."""
+        limit = MaxDrawdownLimit(max_drawdown=0.10)
+        state = PortfolioState(
+            equity=85000.0,
+            initial_equity=100000.0,
+            high_water_mark=100000.0,
+            current_drawdown=0.15,
+            num_positions=0,
+            positions={},
+            daily_pnl=0.0,
+            gross_exposure=0.0,
+            net_exposure=0.0,
+        )
+        result = limit.check(state)
+        assert result.breached
+        assert result.action == "liquidate"
 
     def test_warn_threshold(self):
         """Test warning at warn_threshold."""
@@ -300,6 +325,24 @@ class TestDailyLossLimit:
         )
         result = limit.check(state)
         assert not result.breached  # No error
+
+    def test_breach_uses_liquidate_by_default(self):
+        """Test default daily-loss action uses liquidation semantics."""
+        limit = DailyLossLimit(max_daily_loss_pct=0.02)
+        state = PortfolioState(
+            equity=95000.0,
+            initial_equity=100000.0,
+            high_water_mark=100000.0,
+            current_drawdown=0.0,
+            num_positions=1,
+            positions={"A": 45000.0},
+            daily_pnl=-5000.0,
+            gross_exposure=45000.0,
+            net_exposure=45000.0,
+        )
+        result = limit.check(state)
+        assert result.breached
+        assert result.action == "liquidate"
 
 
 class TestGrossExposureLimit:

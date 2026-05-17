@@ -122,6 +122,7 @@ class ExitReason(str, Enum):
     TAKE_PROFIT = "take_profit"  # Take-profit triggered
     TRAILING_STOP = "trailing_stop"  # Trailing stop triggered
     TIME_STOP = "time_stop"  # Max hold time exceeded
+    RISK_LIQUIDATION = "risk_liquidation"  # Portfolio risk limit forced liquidation
     END_OF_DATA = "end_of_data"  # Backtest ended with open position
 
 

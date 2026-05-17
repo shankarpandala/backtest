@@ -30,13 +30,13 @@ class LimitResult:
 
     Attributes:
         breached: True if limit was breached
-        action: Action to take ("none", "warn", "reduce", "halt")
+        action: Action to take ("none", "warn", "reduce", "halt", "liquidate")
         reason: Human-readable explanation
         reduction_pct: If action=="reduce", percentage to reduce by
     """
 
     breached: bool
-    action: str = "none"  # "none", "warn", "reduce", "halt"
+    action: str = "none"  # "none", "warn", "reduce", "halt", "liquidate"
     reason: str = ""
     reduction_pct: float = 0.0
 
@@ -55,6 +55,10 @@ class LimitResult:
     @classmethod
     def halt(cls, reason: str) -> "LimitResult":
         return cls(breached=True, action="halt", reason=reason)
+
+    @classmethod
+    def liquidate(cls, reason: str) -> "LimitResult":
+        return cls(breached=True, action="liquidate", reason=reason)
 
 
 @dataclass
@@ -90,13 +94,13 @@ class PortfolioState:
 
 @dataclass
 class MaxDrawdownLimit(PortfolioLimit):
-    """Halt trading when drawdown exceeds threshold.
+    """Liquidate or halt when drawdown exceeds threshold.
 
     Args:
         max_drawdown: Maximum allowed drawdown (0.0-1.0)
                      Default 0.20 = 20% max drawdown
-        action: Action when breached ("warn", "reduce", "halt")
-                Default "halt" - stops all new trades
+        action: Action when breached ("warn", "reduce", "halt", "liquidate")
+                Default "liquidate" - flatten positions and stop new trades
         warn_threshold: Optional earlier threshold for warnings
 
     Example:
@@ -105,7 +109,7 @@ class MaxDrawdownLimit(PortfolioLimit):
     """
 
     max_drawdown: float = 0.20
-    action: str = "halt"
+    action: str = "liquidate"
     warn_threshold: float | None = None
 
     def check(self, state: PortfolioState) -> LimitResult:
@@ -181,12 +185,12 @@ class MaxExposureLimit(PortfolioLimit):
 
 @dataclass
 class DailyLossLimit(PortfolioLimit):
-    """Halt trading when daily loss exceeds threshold.
+    """Liquidate or halt when daily loss exceeds threshold.
 
     Args:
         max_daily_loss_pct: Maximum daily loss as % of equity (0.0-1.0)
                            Default 0.02 = 2% max daily loss
-        action: Action when breached
+        action: Action when breached ("warn", "reduce", "halt", "liquidate")
 
     Example:
         limit = DailyLossLimit(max_daily_loss_pct=0.02)
@@ -194,7 +198,7 @@ class DailyLossLimit(PortfolioLimit):
     """
 
     max_daily_loss_pct: float = 0.02
-    action: str = "halt"
+    action: str = "liquidate"
 
     def check(self, state: PortfolioState) -> LimitResult:
         if state.equity > 0:

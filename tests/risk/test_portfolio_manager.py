@@ -112,6 +112,18 @@ class TestRiskManagerUpdate:
         assert manager.is_halted
         assert "drawdown" in manager.halt_reason
 
+    def test_update_liquidate_action(self):
+        """Test that liquidate action also sets halted state."""
+        limits = [MaxDrawdownLimit(max_drawdown=0.10)]
+        manager = RiskManager(limits=limits)
+        manager.initialize(initial_equity=100000.0)
+
+        results = manager.update(equity=85000.0, positions={"AAPL": 40000.0})
+
+        assert any(result.action == "liquidate" for result in results)
+        assert manager.is_halted
+        assert "drawdown" in manager.halt_reason
+
     def test_update_warn_action(self):
         """Test that warn action adds to warnings."""
         limits = [MaxExposureLimit(max_exposure_pct=0.50, action="warn")]
@@ -291,8 +303,9 @@ class TestRiskManagerIntegration:
         assert any(r.action == "warn" for r in results)
         assert manager.can_open_position()  # Warn doesn't halt
 
-        # Drawdown breach - halt (21.6% from 102000 to 80000)
+        # Drawdown breach - liquidate (21.6% from 102000 to 80000)
         results = manager.update(equity=80000.0, positions={"AAPL": 40000.0}, timestamp=ts)
+        assert any(r.action == "liquidate" for r in results)
         assert manager.is_halted
         assert not manager.can_open_position()
 

@@ -104,7 +104,7 @@ class RiskManager:
             if result.breached:
                 results.append(result)
 
-                if result.action == "halt":
+                if result.action in {"halt", "liquidate"}:
                     self._halted = True
                     self._halt_reason = result.reason
                 elif result.action == "warn":

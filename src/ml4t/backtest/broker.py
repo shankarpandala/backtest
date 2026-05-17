@@ -33,6 +33,7 @@ from .types import (
     AssetTradingStats,
     ContractSpec,
     ExecutionMode,
+    ExitReason,
     Fill,
     Order,
     OrderSide,
@@ -1012,6 +1013,34 @@ class Broker:
                 _options=_options,
             )
         return None
+
+    def flatten_all_positions(
+        self,
+        reason: str,
+        order_type: OrderType = OrderType.MARKET,
+    ) -> list[Order]:
+        """Cancel pending orders and submit exits for every open position.
+
+        Args:
+            reason: Human-readable risk reason for the liquidation
+            order_type: Exit order type to use for the flattening orders
+
+        Returns:
+            List of submitted exit orders
+        """
+        for order in list(self.pending_orders):
+            self.cancel_order(order.order_id)
+
+        liquidations: list[Order] = []
+        for asset in list(self.positions):
+            order = self.close_position(asset, order_type=order_type)
+            if order is None:
+                continue
+            order._exit_reason = ExitReason.RISK_LIQUIDATION
+            order._risk_exit_reason = reason
+            liquidations.append(order)
+
+        return liquidations
 
     # === Position Modification (P1 Features) ===
 

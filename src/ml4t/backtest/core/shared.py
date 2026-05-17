@@ -49,6 +49,8 @@ def reason_to_exit_reason(reason: str) -> ExitReason:
         return ExitReason.TRAILING_STOP
     elif "time" in reason_lower:
         return ExitReason.TIME_STOP
+    elif "risk_liquidation" in reason_lower or "liquidat" in reason_lower:
+        return ExitReason.RISK_LIQUIDATION
     elif "end_of_data" in reason_lower:
         return ExitReason.END_OF_DATA
     else:

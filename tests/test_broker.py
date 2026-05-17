@@ -9,6 +9,7 @@ from ml4t.backtest.config import ShareType
 from ml4t.backtest.models import NoCommission, NoSlippage, PercentageCommission
 from ml4t.backtest.types import (
     ExecutionMode,
+    ExitReason,
     Order,
     OrderSide,
     OrderStatus,
@@ -199,6 +200,33 @@ class TestClosePosition:
         assert order is not None
         assert order.side == OrderSide.BUY  # Buy to cover short
         assert order.quantity == 50.0
+
+    def test_flatten_all_positions_cancels_pending_and_marks_exits(self, broker):
+        """Test flatten_all_positions cancels pending orders and tags exits."""
+        broker.positions["AAPL"] = Position(
+            asset="AAPL",
+            quantity=100.0,
+            entry_price=150.0,
+            entry_time=datetime(2024, 1, 1, 9, 30),
+        )
+        broker.positions["MSFT"] = Position(
+            asset="MSFT",
+            quantity=-25.0,
+            entry_price=300.0,
+            entry_time=datetime(2024, 1, 1, 9, 30),
+        )
+        pending_entry = broker.submit_order("GOOG", 10.0, OrderSide.BUY)
+
+        orders = broker.flatten_all_positions("max drawdown breached")
+
+        assert pending_entry is not None
+        assert pending_entry.status == OrderStatus.CANCELLED
+        assert len(orders) == 2
+        assert {order.asset for order in orders} == {"AAPL", "MSFT"}
+        assert {order.side for order in orders} == {OrderSide.SELL, OrderSide.BUY}
+        assert all(order._exit_reason == ExitReason.RISK_LIQUIDATION for order in orders)
+        assert all(order._risk_exit_reason == "max drawdown breached" for order in orders)
+        assert broker.get_pending_orders() == orders
 
 
 class TestIsExitOrder:
