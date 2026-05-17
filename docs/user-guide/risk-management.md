@@ -212,7 +212,7 @@ Import from `ml4t.backtest.risk.portfolio.limits`:
 from ml4t.backtest.risk.portfolio.limits import MaxDrawdownLimit
 
 limit = MaxDrawdownLimit(
-    max_drawdown=0.20,       # Halt at -20% drawdown
+    max_drawdown=0.20,       # Liquidate at -20% drawdown
     warn_threshold=0.15,     # Warn at -15%
 )
 ```
@@ -238,7 +238,7 @@ limit = MaxExposureLimit(max_exposure=2.0)  # Max 200% gross exposure
 ```python
 from ml4t.backtest.risk.portfolio.limits import DailyLossLimit
 
-limit = DailyLossLimit(max_daily_loss=0.03)  # Halt at -3% daily loss
+limit = DailyLossLimit(max_daily_loss=0.03)  # Liquidate at -3% daily loss
 ```
 
 ### GrossExposureLimit / NetExposureLimit
@@ -286,6 +286,22 @@ Each limit check returns a `LimitResult` with an action:
 | `warn` | Log warning, continue trading |
 | `reduce` | Reduce position sizes by a percentage |
 | `halt` | Stop opening new positions |
+| `liquidate` | Flatten open positions and stop new trading |
+
+When using portfolio limits in a live strategy loop, pass the broker into
+`RiskManager.update(...)` so liquidation actions are applied immediately:
+
+```python
+results = risk_manager.update(
+    equity=broker.get_account_value(),
+    positions={asset: pos.market_value for asset, pos in broker.positions.items()},
+    timestamp=timestamp,
+    broker=broker,
+)
+
+if risk_manager.is_halted:
+    return
+```
 
 ## See It in Action
 

@@ -1,5 +1,6 @@
 """RiskManager for portfolio-level risk management."""
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -28,6 +29,12 @@ class RiskManager:
         ])
 
         # In strategy or engine:
+        results = manager.update(
+            equity=broker.get_account_value(),
+            positions={asset: pos.market_value for asset, pos in broker.positions.items()},
+            timestamp=timestamp,
+            broker=broker,
+        )
         if manager.can_open_position():
             broker.submit_order(...)
     """
@@ -66,6 +73,7 @@ class RiskManager:
         positions: dict[str, float],
         timestamp: datetime | None = None,
         context: dict[str, Any] | None = None,
+        broker: Any | None = None,
     ) -> list[LimitResult]:
         """Update risk state and check all limits.
 
@@ -74,6 +82,9 @@ class RiskManager:
             positions: Dict of asset -> position market value
             timestamp: Current timestamp
             context: Optional context dict with historical data (e.g., returns for VaR)
+            broker: Optional broker handle. Required to auto-apply
+                ``action="liquidate"`` by calling
+                ``broker.flatten_all_positions(reason=...)``.
 
         Returns:
             List of LimitResult for any breached limits
@@ -98,6 +109,7 @@ class RiskManager:
         # Check all limits
         results = []
         self._warnings = []
+        liquidation_reasons: list[str] = []
 
         for limit in self.limits:
             result = limit.check(state)
@@ -107,8 +119,23 @@ class RiskManager:
                 if result.action in {"halt", "liquidate"}:
                     self._halted = True
                     self._halt_reason = result.reason
+                    if result.action == "liquidate":
+                        liquidation_reasons.append(result.reason)
                 elif result.action == "warn":
                     self._warnings.append(result.reason)
+
+        if liquidation_reasons:
+            liquidation_reason = "; ".join(dict.fromkeys(liquidation_reasons))
+            if broker is not None:
+                broker.flatten_all_positions(reason=liquidation_reason)
+            else:
+                warnings.warn(
+                    "RiskManager.update() produced action='liquidate' but no broker was "
+                    "provided. Pass broker=... or explicitly call "
+                    "broker.flatten_all_positions(...).",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         return results
 

@@ -2,6 +2,10 @@
 
 from datetime import datetime
 
+import pytest
+
+from ml4t.backtest.broker import Broker
+from ml4t.backtest.models import NoCommission, NoSlippage
 from ml4t.backtest.risk.portfolio.limits import (
     GrossExposureLimit,
     MaxDrawdownLimit,
@@ -10,6 +14,7 @@ from ml4t.backtest.risk.portfolio.limits import (
     PortfolioState,
 )
 from ml4t.backtest.risk.portfolio.manager import RiskManager
+from ml4t.backtest.types import ExitReason, Position
 
 
 class TestRiskManagerInitialization:
@@ -95,7 +100,8 @@ class TestRiskManagerUpdate:
         manager.initialize(initial_equity=100000.0)
 
         # Trigger drawdown limit
-        results = manager.update(equity=85000.0, positions={"A": 40000.0, "B": 45000.0})
+        with pytest.warns(UserWarning, match="action='liquidate'"):
+            results = manager.update(equity=85000.0, positions={"A": 40000.0, "B": 45000.0})
 
         # Should detect drawdown breach
         assert len(results) >= 1
@@ -118,11 +124,41 @@ class TestRiskManagerUpdate:
         manager = RiskManager(limits=limits)
         manager.initialize(initial_equity=100000.0)
 
-        results = manager.update(equity=85000.0, positions={"AAPL": 40000.0})
+        with pytest.warns(UserWarning, match="action='liquidate'"):
+            results = manager.update(equity=85000.0, positions={"AAPL": 40000.0})
 
         assert any(result.action == "liquidate" for result in results)
         assert manager.is_halted
         assert "drawdown" in manager.halt_reason
+
+    def test_update_liquidate_action_flattens_with_broker(self):
+        """Test liquidate action auto-flattens positions when broker is provided."""
+        limits = [MaxDrawdownLimit(max_drawdown=0.10)]
+        manager = RiskManager(limits=limits)
+        manager.initialize(initial_equity=100000.0)
+        broker = Broker(
+            initial_cash=100000.0,
+            commission_model=NoCommission(),
+            slippage_model=NoSlippage(),
+        )
+        broker.positions["AAPL"] = Position(
+            asset="AAPL",
+            quantity=100.0,
+            entry_price=150.0,
+            entry_time=datetime(2024, 1, 1, 9, 30),
+        )
+
+        results = manager.update(
+            equity=85000.0,
+            positions={"AAPL": 15000.0},
+            broker=broker,
+        )
+
+        assert any(result.action == "liquidate" for result in results)
+        assert manager.is_halted
+        pending = broker.get_pending_orders()
+        assert len(pending) == 1
+        assert pending[0]._exit_reason == ExitReason.RISK_LIQUIDATION
 
     def test_update_warn_action(self):
         """Test that warn action adds to warnings."""
@@ -304,7 +340,8 @@ class TestRiskManagerIntegration:
         assert manager.can_open_position()  # Warn doesn't halt
 
         # Drawdown breach - liquidate (21.6% from 102000 to 80000)
-        results = manager.update(equity=80000.0, positions={"AAPL": 40000.0}, timestamp=ts)
+        with pytest.warns(UserWarning, match="action='liquidate'"):
+            results = manager.update(equity=80000.0, positions={"AAPL": 40000.0}, timestamp=ts)
         assert any(r.action == "liquidate" for r in results)
         assert manager.is_halted
         assert not manager.can_open_position()
@@ -324,10 +361,11 @@ class TestRiskManagerIntegration:
         manager.initialize(initial_equity=100000.0)
 
         # Trigger multiple breaches
-        results = manager.update(
-            equity=80000.0,  # 20% drawdown
-            positions={"A": 50000.0, "B": 40000.0, "C": 30000.0},  # 3 positions, 150% gross
-        )
+        with pytest.warns(UserWarning, match="action='liquidate'"):
+            results = manager.update(
+                equity=80000.0,  # 20% drawdown
+                positions={"A": 50000.0, "B": 40000.0, "C": 30000.0},  # 3 positions, 150% gross
+            )
 
         # Should detect multiple breaches
         assert len(results) >= 2
